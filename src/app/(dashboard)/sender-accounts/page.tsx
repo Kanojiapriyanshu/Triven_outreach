@@ -1,5 +1,5 @@
 'use client'
-import { useState, useEffect } from 'react'
+import { Suspense, useState, useEffect } from 'react'
 import useSWR from 'swr'
 import { toast } from 'sonner'
 import { useSearchParams } from 'next/navigation'
@@ -32,7 +32,7 @@ function StatusIcon({ status }: { status: string }) {
   return <XCircle className="h-4 w-4 text-slate-400" />
 }
 
-export default function SenderAccountsPage() {
+function SenderAccountsPageInner() {
   const searchParams = useSearchParams()
   const { data: accounts, mutate } = useSWR<SenderAccount[]>('/api/sender-accounts', fetcher)
 
@@ -232,7 +232,7 @@ export default function SenderAccountsPage() {
       </Dialog>
 
       {/* Edit dialog */}
-      <Dialog open={!!editAccount} onOpenChange={() => setEditAccount(null)}>
+      <Dialog open={!!editAccount} onOpenChange={() => setEditAccount(null)} >
         <DialogContent>
           <DialogHeader><DialogTitle>Edit Sender Account</DialogTitle></DialogHeader>
           <div className="space-y-4">
@@ -263,4 +263,8 @@ export default function SenderAccountsPage() {
       </Dialog>
     </div>
   )
+}
+
+export default function SenderAccountsPage() {
+  return <Suspense fallback={<div className="p-8 text-slate-400 text-sm">Loading…</div>}><SenderAccountsPageInner /></Suspense>
 }

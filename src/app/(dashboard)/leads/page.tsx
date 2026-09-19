@@ -1,5 +1,5 @@
 'use client'
-import { useState, useCallback } from 'react'
+import { Suspense, useState, useCallback } from 'react'
 import useSWR from 'swr'
 import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
@@ -30,7 +30,7 @@ const ALL_STATUSES = [
   'UNSUBSCRIBED','INVALID_EMAIL','DO_NOT_CONTACT',
 ]
 
-export default function LeadsPage() {
+function LeadsPageInner() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const [page, setPage] = useState(1)
@@ -332,4 +332,8 @@ export default function LeadsPage() {
       )}
     </div>
   )
+}
+
+export default function LeadsPage() {
+  return <Suspense fallback={<div className="p-8 text-slate-400 text-sm">Loading…</div>}><LeadsPageInner /></Suspense>
 }
