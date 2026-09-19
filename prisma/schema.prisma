@@ -1,0 +1,382 @@
+// Triven CRM – Prisma Schema
+// Database: Neon PostgreSQL
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DATABASE_URL_UNPOOLED")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// AUTH
+// ─────────────────────────────────────────────────────────────────────────────
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  name         String
+  passwordHash String
+  role         String   @default("SALES") // ADMIN | SALES | VIEWER
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  leads      Lead[]
+  activities Activity[]
+
+  @@map("users")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SENDER ACCOUNTS (Gmail OAuth)
+// ─────────────────────────────────────────────────────────────────────────────
+
+model SenderAccount {
+  id               String    @id @default(cuid())
+  displayName      String
+  email            String    @unique
+  gmailStatus      String    @default("NOT_CONNECTED") // NOT_CONNECTED | CONNECTED | ERROR | EXPIRED
+  accessToken      String?   @db.Text
+  refreshToken     String?   @db.Text
+  tokenExpiresAt   DateTime?
+  dailyEmailTarget Int       @default(20)
+  isActive         Boolean   @default(true)
+  signature        String?   @db.Text
+  timezone         String    @default("America/New_York")
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  leads                 Lead[]
+  campaignSenderAccounts CampaignSenderAccount[]
+  activities            Activity[]
+  followUpTasks         FollowUpTask[]
+
+  @@map("sender_accounts")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CAMPAIGNS
+// ─────────────────────────────────────────────────────────────────────────────
+
+model Campaign {
+  id             String   @id @default(cuid())
+  name           String
+  industry       String
+  targetCountry  String?
+  targetLocation String?
+  product        String?
+  description    String?  @db.Text
+  timezone       String   @default("America/New_York")
+  // Follow-up schedule: days after first email
+  followUpDay1   Int      @default(1)
+  followUpDay2   Int      @default(2)
+  followUpDay3   Int      @default(3)
+  isActive       Boolean  @default(true)
+  isPaused       Boolean  @default(false)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  leads          Lead[]
+  senderAccounts CampaignSenderAccount[]
+  templates      EmailTemplate[]
+
+  @@map("campaigns")
+}
+
+model CampaignSenderAccount {
+  campaignId      String
+  senderAccountId String
+
+  campaign      Campaign      @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  senderAccount SenderAccount @relation(fields: [senderAccountId], references: [id], onDelete: Cascade)
+
+  @@id([campaignId, senderAccountId])
+  @@map("campaign_sender_accounts")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// LEADS
+// ─────────────────────────────────────────────────────────────────────────────
+
+model Lead {
+  id String @id @default(cuid())
+
+  // Basic info
+  firstName   String?
+  lastName    String?
+  fullName    String?
+  jobTitle    String?
+  companyName String
+  website     String?
+  companyEmail String?
+  phone       String?
+  linkedIn    String?
+  country     String?
+  state       String?
+  city        String?
+  industry    String?
+  subIndustry String?
+  companySize String?
+  notes       String?  @db.Text
+
+  // Sales info
+  campaignId      String?
+  leadSource      String   @default("MANUAL") // MANUAL|IMPORT|REFERRAL|WEBSITE|LINKEDIN|COLD_OUTREACH|OTHER
+  status          String   @default("NEW")
+  stage           String?
+  priority        String   @default("MEDIUM") // LOW|MEDIUM|HIGH|URGENT
+  score           Int      @default(0)
+  assignedUserId  String?
+  senderAccountId String?
+  lastContactedAt DateTime?
+  nextFollowUpAt  DateTime?
+  lastResponseAt  DateTime?
+
+  // Research
+  personalizationNotes String? @db.Text
+  companyPainPoint     String? @db.Text
+  whyThisLead          String? @db.Text
+  researchSummary      String? @db.Text
+  websiteNotes         String? @db.Text
+  socialMediaNotes     String? @db.Text
+  relevantService      String?
+  prospectingNotes     String? @db.Text
+
+  // Outreach
+  firstEmailSubject String?
+  firstEmailBody    String? @db.Text
+  firstEmailSentAt  DateTime?
+  followUp1Subject  String?
+  followUp1Body     String? @db.Text
+  followUp1SentAt   DateTime?
+  followUp2Subject  String?
+  followUp2Body     String? @db.Text
+  followUp2SentAt   DateTime?
+  followUp3Subject  String?
+  followUp3Body     String? @db.Text
+  followUp3SentAt   DateTime?
+
+  // Conversion
+  hasReplied    Boolean  @default(false)
+  isInterested  Boolean  @default(false)
+  demoSent      Boolean  @default(false)
+  demoDate      DateTime?
+  meetingBooked Boolean  @default(false)
+  meetingDate   DateTime?
+  proposalSent  Boolean  @default(false)
+  hasSale       Boolean  @default(false)
+  saleDate      DateTime?
+  dealValue     Decimal? @db.Decimal(12, 2)
+  lostReason    String?
+
+  // Metadata
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  campaign      Campaign?      @relation(fields: [campaignId], references: [id])
+  assignedUser  User?          @relation(fields: [assignedUserId], references: [id])
+  senderAccount SenderAccount? @relation(fields: [senderAccountId], references: [id])
+  activities    Activity[]
+  followUpTasks FollowUpTask[]
+  emailMessages EmailMessage[]
+
+  @@index([companyEmail])
+  @@index([companyName])
+  @@index([senderAccountId])
+  @@index([campaignId])
+  @@index([status])
+  @@index([nextFollowUpAt])
+  @@index([linkedIn])
+  @@map("leads")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// EMAIL TEMPLATES
+// ─────────────────────────────────────────────────────────────────────────────
+
+model EmailTemplate {
+  id         String  @id @default(cuid())
+  name       String
+  subject    String
+  body       String  @db.Text
+  type       String  // FIRST_EMAIL|FOLLOW_UP_1|FOLLOW_UP_2|FOLLOW_UP_3|OTHER
+  campaignId String?
+  isDefault  Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  campaign Campaign? @relation(fields: [campaignId], references: [id])
+
+  @@map("email_templates")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FOLLOW-UP TASKS
+// ─────────────────────────────────────────────────────────────────────────────
+
+model FollowUpTask {
+  id              String    @id @default(cuid())
+  leadId          String
+  senderAccountId String?
+  type            String    // FOLLOW_UP_1|FOLLOW_UP_2|FOLLOW_UP_3
+  subject         String?
+  body            String?   @db.Text
+  scheduledAt     DateTime
+  status          String    @default("PENDING") // PENDING|SENT|SKIPPED|CANCELLED
+  sentAt          DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  lead          Lead           @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  senderAccount SenderAccount? @relation(fields: [senderAccountId], references: [id])
+
+  @@index([leadId])
+  @@index([scheduledAt])
+  @@index([status])
+  @@map("follow_up_tasks")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ACTIVITIES (timeline)
+// ─────────────────────────────────────────────────────────────────────────────
+
+model Activity {
+  id              String   @id @default(cuid())
+  leadId          String
+  userId          String?
+  senderAccountId String?
+  type            String   // EMAIL_SENT|FOLLOW_UP_SENT|EMAIL_OPENED|EMAIL_REPLIED|CALL|DEMO_SENT|MEETING_BOOKED|STATUS_CHANGED|NOTE_ADDED|TASK_CREATED|SALE|OTHER
+  title           String
+  body            String?  @db.Text
+  metadata        Json?
+  createdAt       DateTime @default(now())
+
+  lead          Lead           @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  user          User?          @relation(fields: [userId], references: [id])
+  senderAccount SenderAccount? @relation(fields: [senderAccountId], references: [id])
+
+  @@index([leadId])
+  @@index([createdAt])
+  @@map("activities")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// EMAIL MESSAGES (Gmail thread sync)
+// ─────────────────────────────────────────────────────────────────────────────
+
+model EmailMessage {
+  id             String    @id @default(cuid())
+  leadId         String
+  gmailMessageId String?   @unique
+  gmailThreadId  String?
+  direction      String    // OUTBOUND|INBOUND
+  subject        String?
+  body           String?   @db.Text
+  fromAddress    String?
+  toAddress      String?
+  sentAt         DateTime?
+  receivedAt     DateTime?
+  isRead         Boolean   @default(false)
+  createdAt      DateTime  @default(now())
+
+  lead Lead @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  @@index([leadId])
+  @@index([gmailThreadId])
+  @@map("email_messages")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SUPPRESSION LIST
+// ─────────────────────────────────────────────────────────────────────────────
+
+model SuppressionEntry {
+  id      String   @id @default(cuid())
+  email   String?  @unique
+  domain  String?
+  reason  String?  // UNSUBSCRIBED|BOUNCED|INVALID|DO_NOT_CONTACT|SPAM_COMPLAINT
+  addedAt DateTime @default(now())
+
+  @@index([email])
+  @@index([domain])
+  @@map("suppression_list")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// IMPORTS
+// ─────────────────────────────────────────────────────────────────────────────
+
+model Import {
+  id            String   @id @default(cuid())
+  fileName      String
+  fileType      String   // CSV|XLSX
+  totalRows     Int      @default(0)
+  validRows     Int      @default(0)
+  importedRows  Int      @default(0)
+  duplicateRows Int      @default(0)
+  errorRows     Int      @default(0)
+  status        String   @default("PENDING") // PENDING|VALIDATING|READY|IMPORTING|COMPLETED|FAILED
+  columnMapping Json?
+  errors        Json?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  rows ImportRow[]
+
+  @@map("imports")
+}
+
+model ImportRow {
+  id        String   @id @default(cuid())
+  importId  String
+  rowNumber Int
+  rawData   Json
+  status    String   @default("PENDING") // PENDING|VALID|DUPLICATE|ERROR|IMPORTED|SKIPPED
+  errorMsg  String?
+  leadId    String?
+  createdAt DateTime @default(now())
+
+  import Import @relation(fields: [importId], references: [id], onDelete: Cascade)
+
+  @@index([importId])
+  @@index([status])
+  @@map("import_rows")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// NOTIFICATIONS
+// ─────────────────────────────────────────────────────────────────────────────
+
+model Notification {
+  id        String   @id @default(cuid())
+  userId    String?
+  type      String   // REPLY|FOLLOW_UP_DUE|FOLLOW_UP_OVERDUE|MEETING|DEMO|IMPORT_DONE|IMPORT_ERROR|GMAIL_ERROR
+  title     String
+  body      String?
+  isRead    Boolean  @default(false)
+  leadId    String?
+  metadata  Json?
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([isRead])
+  @@map("notifications")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SETTINGS
+// ─────────────────────────────────────────────────────────────────────────────
+
+model Setting {
+  id        String   @id @default(cuid())
+  key       String   @unique
+  value     String   @db.Text
+  updatedAt DateTime @updatedAt
+
+  @@map("settings")
+}

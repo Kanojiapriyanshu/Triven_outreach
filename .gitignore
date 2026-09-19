@@ -1,0 +1,50 @@
+# Dependencies
+node_modules/
+.venv/
+
+# Next.js build
+.next/
+out/
+
+# Environment
+.env
+.env.local
+
+# Prisma
+prisma/*.db
+
+# Database / SQLite (old)
+data/*.db
+data/*.db-shm
+data/*.db-wal
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+src/triven_outreach_engine.egg-info/
+
+# Old Python project files (kept locally, not part of Next.js CRM)
+config/
+examples/
+locations/
+templates/
+tests/
+Makefile
+pyproject.toml
+requirements.txt
+RISKS.md
+render.yaml
+
+# Old Python source (Streamlit/SQLite version)
+src/toe/
+
+# Claude Code session files
+.claude/
+
+# Misc
+.DS_Store
+*.log
+coverage/
+dist/
+tsconfig.tsbuildinfo
