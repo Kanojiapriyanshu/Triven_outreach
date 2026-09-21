@@ -35,6 +35,10 @@ export interface ComposeLead {
   senderAccountId?: string | null
   campaignId?: string | null
   firstEmailSentAt?: string | null
+  // Research used by {{hook}}, {{name}}, {{gapLine}} in the preview
+  whyThisLead?: string | null
+  notes?: string | null
+  personalizationNotes?: string | null
 }
 
 interface Template {

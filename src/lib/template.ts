@@ -1,5 +1,6 @@
 // Template personalization shared by the browser (preview) and the server (sending).
 // Keep this file free of server-only imports.
+import { signalVars, cleanCompanyName } from './signals'
 
 export interface TemplateLead {
   firstName?: string | null
@@ -12,6 +13,8 @@ export interface TemplateLead {
   industry?: string | null
   website?: string | null
   personalizationNotes?: string | null
+  whyThisLead?: string | null
+  notes?: string | null
 }
 
 export interface TemplateSender {
@@ -20,6 +23,10 @@ export interface TemplateSender {
 }
 
 export const TEMPLATE_VARS = [
+  { key: 'name',            label: 'Smart greeting (Dr. Neely / team)' },
+  { key: 'hook',            label: 'Personal opener from research' },
+  { key: 'gapLine',         label: 'Their coverage gap' },
+  { key: 'forwardLine',     label: 'Pass-along line (front desk)' },
   { key: 'firstName',       label: 'First name' },
   { key: 'lastName',        label: 'Last name' },
   { key: 'companyName',     label: 'Company' },
@@ -42,11 +49,14 @@ const DEFAULT_FALLBACKS: Record<string, (vars: Record<string, string>) => string
 export function buildTemplateVars(lead: TemplateLead, sender?: TemplateSender | null): Record<string, string> {
   const nameParts = (lead.fullName || '').trim().split(/\s+/).filter(Boolean)
   const senderName = sender?.displayName || ''
+  const firstName = lead.firstName || (/^dr\.?$/i.test(nameParts[0] || '') ? '' : nameParts[0]) || ''
   return {
-    firstName:       lead.firstName || nameParts[0] || '',
+    // Research-driven personalisation: {{name}}, {{hook}}, {{gapLine}}, {{forwardLine}} …
+    ...signalVars(lead, firstName),
+    firstName,
     lastName:        lead.lastName || nameParts.slice(1).join(' ') || '',
     fullName:        lead.fullName || [lead.firstName, lead.lastName].filter(Boolean).join(' '),
-    companyName:     lead.companyName || '',
+    companyName:     cleanCompanyName(lead.companyName),
     email:           lead.companyEmail || '',
     jobTitle:        lead.jobTitle || '',
     city:            lead.city || '',

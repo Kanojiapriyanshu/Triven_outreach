@@ -23,68 +23,71 @@ export const SEQUENCE_LIBRARY: LibrarySequence[] = [
   {
     id: 'dental',
     niche: 'Dental practices',
-    description: 'Missed calls while the front desk is busy or the practice is closed.',
+    description: 'Written from each practice\'s own research: its hours, closed days, doctor, reviews. Greets "Dr. Neely" or the front desk, and asks the front desk to pass it on.',
     steps: [
       {
         type: 'FIRST_EMAIL',
-        name: 'Dental: missed calls',
-        subject: 'patients calling after hours',
-        body: `Hi {{firstName}},
+        name: 'Dental: the gap in your hours',
+        subject: '{{companyName}} after {{closingTime|hours}}',
+        body: `Hi {{name}},
 
-{{personalNote}}
+{{hook}}
 
-Quick question: when the front desk is with a patient, or the practice is closed, where do new-patient calls go?
+Most new patients call when it suits them: after work, at lunch, or on a weekend with a toothache. If nobody picks up, most don't leave a voicemail. They call the next practice on Google.
 
-For most practices it's voicemail, and most callers don't leave a message. They just ring the next dentist on Google.
+Triven is an AI receptionist built for dental practices. It answers every call 24/7, handles insurance, pricing and availability questions the way your team would, and books straight into your schedule. Your front desk stays focused on the patients in the chair.
 
-We built an AI receptionist for dental practices. It answers every call 24/7, books straight into your calendar, handles insurance and pricing questions, and texts back anyone who hangs up.
+I'd like to build one trained on {{companyName}}'s services and hours, and send you a number to call and hear it for yourself. Free, ready in 24 hours, no sales call needed.
 
-If it's useful, I'll set one up trained on {{companyName}}'s services and hours and send you a number to call and test it yourself. No cost, takes me a day.
+Worth me setting it up?
 
-Worth a look?
+{{forwardLine}}
 
-${SIGN}
-
-P.S. Not the right person? Just say, and I won't follow up.`,
+${SIGN}`,
       },
       {
         type: 'FOLLOW_UP_1',
-        name: 'Dental: quick bump',
+        name: 'Dental: hear it yourself',
         subject: '',
-        body: `Hi {{firstName}}, bumping this in case it got buried.
+        body: `Hi {{name}},
 
-The easiest way to judge it is to hear it. I can have a version trained on {{companyName}} ready by tomorrow: you call it, ask to book a cleaning, and see what happens. Takes about a minute.
+Quick follow-up. The fastest way to judge this is to hear it.
 
-Want me to set it up?
+I can have a {{companyName}} version ready by tomorrow. Call it {{testMoment}}, ask to book a cleaning or whether you take their insurance, and you'll hear exactly what a new patient would.
+
+If it doesn't sound like your practice, you've lost two minutes. Shall I build it?
 
 {{senderFirstName}}`,
       },
       {
         type: 'FOLLOW_UP_2',
-        name: 'Dental: the numbers',
+        name: 'Dental: your numbers',
         subject: '',
-        body: `Hi {{firstName}},
+        body: `Hi {{name}},
 
-One number that tends to surprise practice owners: most offices miss 20 to 30% of inbound calls in a normal week, and a single new patient is often worth well over $1,000 over their lifetime.
+I ran some rough numbers for {{companyName}}.
 
-So even two or three recovered calls a month usually covers the cost many times over, without adding anyone to the front desk.
+{{gapLine}} If that means just three missed new-patient calls a month, and a new patient is often worth $1,000 or more over their first couple of years, that's around $3,000 a month going to other practices in {{city|your area}}.
 
-Happy to show you what it would catch at {{companyName}}. Open to a quick 10-minute call this week?
+Triven costs a small fraction of that. No new hire, no training, and nothing changes for your team except fewer missed calls.
+
+Would 10 minutes this week to see it on your own numbers be worth it?
 
 {{senderFirstName}}`,
       },
       {
         type: 'FOLLOW_UP_3',
-        name: 'Dental: close the loop',
+        name: 'Dental: the 7pm test',
         subject: '',
-        body: `Hi {{firstName}},
+        body: `Hi {{name}},
 
-I'll close the loop here so I'm not cluttering your inbox.
+I haven't heard back, so I'll assume the timing isn't right and stop here.
 
-If missed calls or after-hours bookings ever become a priority at {{companyName}}, just reply "demo" and I'll set one up for you to test.
+One thing worth doing either way: call {{companyName}} {{testMoment}} from your mobile and listen to what a new patient hears. If it's voicemail, that's the gap we close.
 
-Thanks for your time, and all the best with the practice.
+If you ever want the demo, reply "demo" and I'll have it ready within a day.
 
+All the best {{practiceWish}},
 ${SIGN}`,
       },
     ],

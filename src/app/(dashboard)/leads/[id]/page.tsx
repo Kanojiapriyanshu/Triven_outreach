@@ -513,6 +513,9 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
             senderAccountId: lead.senderAccountId,
             campaignId:      lead.campaignId,
             firstEmailSentAt: lead.firstEmailSentAt,
+            whyThisLead:     lead.whyThisLead,
+            notes:           lead.notes,
+            personalizationNotes: lead.personalizationNotes,
           }}
           taskId={composeTask?.id}
           taskType={composeTask?.type}
