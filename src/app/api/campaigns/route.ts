@@ -14,6 +14,7 @@ const campaignSchema = z.object({
   followUpDay1: z.number().int().min(1).optional(),
   followUpDay2: z.number().int().min(1).optional(),
   followUpDay3: z.number().int().min(1).optional(),
+  dailyNewLeads: z.number().int().min(1).max(1000).optional(),
   senderAccountIds: z.array(z.string()).optional(),
 })
 
@@ -23,21 +24,37 @@ export async function GET() {
 
   const campaigns = await prisma.campaign.findMany({
     include: {
-      senderAccounts: { include: { senderAccount: { select: { id: true, displayName: true, email: true } } } },
+      senderAccounts: { include: { senderAccount: { select: { id: true, displayName: true, email: true, gmailStatus: true } } } },
       _count: { select: { leads: true, templates: true } },
     },
     orderBy: { createdAt: 'desc' },
   })
 
-  return NextResponse.json(campaigns)
+  // Live numbers per campaign, Instantly-style
+  const dayAgo = new Date(Date.now() - 86_400_000)
+  const withStats = await Promise.all(campaigns.map(async (c) => {
+    const [queued, noEmail, contacted, sentToday, replied, bounced, followUpsPending] = await Promise.all([
+      prisma.lead.count({ where: { campaignId: c.id, firstEmailSentAt: null, companyEmail: { not: null }, hasReplied: false, status: { in: ['NEW', 'READY_TO_CONTACT', 'RESEARCHING'] } } }),
+      prisma.lead.count({ where: { campaignId: c.id, companyEmail: null } }),
+      prisma.lead.count({ where: { campaignId: c.id, firstEmailSentAt: { not: null } } }),
+      prisma.lead.count({ where: { campaignId: c.id, firstEmailSentAt: { gte: dayAgo } } }),
+      prisma.lead.count({ where: { campaignId: c.id, hasReplied: true } }),
+      prisma.lead.count({ where: { campaignId: c.id, status: 'INVALID_EMAIL' } }),
+      prisma.followUpTask.count({ where: { status: 'PENDING', lead: { campaignId: c.id } } }),
+    ])
+    return { ...c, stats: { queued, noEmail, contacted, sentToday, replied, bounced, followUpsPending } }
+  }))
+
+  return NextResponse.json(withStats)
 }
 
 export async function POST(req: NextRequest) {
   const session = await requireAuth()
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-  const body = campaignSchema.parse(await req.json())
-  const { senderAccountIds, ...rest } = body
+  const parsed = campaignSchema.safeParse(await req.json())
+  if (!parsed.success) return NextResponse.json({ error: parsed.error.errors[0]?.message || 'Invalid campaign' }, { status: 400 })
+  const { senderAccountIds, ...rest } = parsed.data
 
   const campaign = await prisma.campaign.create({
     data: {

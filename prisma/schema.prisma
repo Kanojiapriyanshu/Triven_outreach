@@ -77,6 +77,10 @@ model Campaign {
   followUpDay3   Int      @default(3)
   isActive       Boolean  @default(true)
   isPaused       Boolean  @default(false)
+  // Auto-sending (Instantly-style): only ACTIVE campaigns email their queued leads
+  sendingStatus  String    @default("DRAFT") // DRAFT | ACTIVE | PAUSED
+  dailyNewLeads  Int       @default(30)      // max first emails per day for this campaign
+  launchedAt     DateTime?
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 

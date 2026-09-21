@@ -32,7 +32,10 @@ export async function assertSendable(lead: Lead, sender: SenderAccount | null): 
   const suppressed = await prisma.suppressionEntry.findFirst({
     where: { OR: [{ email }, { domain: email.split('@')[1] }] },
   })
-  if (suppressed) throw new OutreachError('This email is on the do-not-contact list')
+  if (suppressed) {
+    await prisma.lead.update({ where: { id: lead.id }, data: { status: 'DO_NOT_CONTACT', nextFollowUpAt: null } })
+    throw new OutreachError('This email is on the do-not-contact list')
+  }
 
   // Bounces hurt the sending account's reputation more than anything: never email a dead domain
   if (!(await domainAcceptsMail(email.split('@')[1]))) {
@@ -117,7 +120,8 @@ export async function deliverEmail(opts: {
     where: { id: lead.id },
     data: {
       lastContactedAt: now,
-      senderAccountId: lead.senderAccountId || sender.id,
+      // The inbox that sent the first email owns the conversation (follow-ups reply from it)
+      senderAccountId: kind === 'FIRST_EMAIL' ? sender.id : lead.senderAccountId || sender.id,
       ...(kind === 'FIRST_EMAIL'
         ? { status: 'FIRST_EMAIL_SENT', firstEmailSubject: subject, firstEmailBody: body, firstEmailSentAt: now }
         : {}),

@@ -2,9 +2,10 @@ name: Outreach Worker
 
 on:
   schedule:
-    # Every 15 minutes: check Gmail for replies/bounces, then send what's due.
+    # Every 5 minutes (GitHub's minimum): check Gmail for replies/bounces, then every free
+    # inbox sends one email. The per-inbox gap (Settings) decides the real pacing.
     # Follow-ups only go out inside the send window set in Settings (default 9 PM–12 AM IST).
-    - cron: '*/15 * * * *'
+    - cron: '*/5 * * * *'
   workflow_dispatch: # manual "Run workflow" button
 
 concurrency:
@@ -13,7 +14,7 @@ concurrency:
 
 jobs:
   tick:
-    name: Check replies & send due emails
+    name: Check replies & send next emails
     runs-on: ubuntu-latest
     timeout-minutes: 3
 

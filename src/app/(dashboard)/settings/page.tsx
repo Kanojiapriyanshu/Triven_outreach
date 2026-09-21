@@ -16,9 +16,13 @@ interface Settings {
   sendWindow: SendWindow
   followUpDays: [number, number, number]
   dailyCapPerSender: number
+  minGapMinutes: number
+  maxGapMinutes: number
 }
 
-const DEFAULTS: Settings = { sendWindow: DEFAULT_SEND_WINDOW, followUpDays: [3, 7, 14], dailyCapPerSender: 40 }
+const DEFAULTS: Settings = {
+  sendWindow: DEFAULT_SEND_WINDOW, followUpDays: [3, 7, 14], dailyCapPerSender: 40, minGapMinutes: 8, maxGapMinutes: 15,
+}
 
 const ZONES = [
   { tz: 'Asia/Kolkata', label: 'India (IST)' },
@@ -42,7 +46,7 @@ export default function SettingsPage() {
   const [saving, setSaving] = useState(false)
   const [blockValue, setBlockValue] = useState('')
 
-  useEffect(() => { if (data && 'sendWindow' in data) setForm(data) }, [data])
+  useEffect(() => { if (data && 'sendWindow' in data) setForm({ ...DEFAULTS, ...data }) }, [data])
 
   function setWindow(patch: Partial<SendWindow>) {
     setForm((f) => ({ ...f, sendWindow: { ...f.sendWindow, ...patch } }))
@@ -150,7 +154,31 @@ export default function SettingsPage() {
               onChange={(e) => setForm((f) => ({ ...f, dailyCapPerSender: Number(e.target.value) || 1 }))}
               className="mt-1"
             />
-            <p className="text-xs text-slate-400 mt-1">Automatic sends only. New Gmail accounts should start around 20–30 a day to protect deliverability.</p>
+            <p className="text-xs text-slate-400 mt-1">New accounts warm up automatically: 5 a day in week 1, then 10, 20 and 30, before this limit applies.</p>
+          </div>
+          <div>
+            <Label>Gap between emails from the same inbox</Label>
+            <div className="mt-1 flex items-center gap-2 text-sm text-slate-600">
+              <Input
+                type="number"
+                min={1}
+                value={form.minGapMinutes}
+                onChange={(e) => setForm((f) => ({ ...f, minGapMinutes: Math.max(1, Number(e.target.value) || 1) }))}
+                className="w-20"
+              />
+              to
+              <Input
+                type="number"
+                min={1}
+                value={form.maxGapMinutes}
+                onChange={(e) => setForm((f) => ({ ...f, maxGapMinutes: Math.max(1, Number(e.target.value) || 1) }))}
+                className="w-20"
+              />
+              minutes (random each time)
+            </div>
+            <p className="text-xs text-slate-400 mt-1">
+              Each inbox sends one email, then waits a random time in this range. Inboxes take turns, so with 6 inboxes something goes out every couple of minutes.
+            </p>
           </div>
         </CardContent>
       </Card>

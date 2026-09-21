@@ -35,6 +35,8 @@ export default function ImportsPage() {
   const { data: senders } = useSWR('/api/sender-accounts', fetcher)
   const [campaignId, setCampaignId] = useState('')
   const [senderChoice, setSenderChoice] = useState('rotate')
+  const [importedCount, setImportedCount] = useState(0)
+  const importedCampaign = (Array.isArray(campaigns) ? campaigns : []).find((c: { id: string }) => c.id === campaignId) as { name: string; sendingStatus: string } | undefined
   const dupFields = duplicateTargets(columnMapping)
   const [importing, setImporting] = useState(false)
   const [duplicateAction, setDuplicateAction] = useState<'skip' | 'update'>('skip')
@@ -94,6 +96,7 @@ export default function ImportsPage() {
       const data = await res.json()
       if (!res.ok) return toast.error(data.error)
       toast.success(`Imported ${data.importedRows} leads`)
+      setImportedCount(data.importedRows)
       setStep('done')
       mutate()
     } finally {
@@ -312,11 +315,22 @@ export default function ImportsPage() {
         <Card>
           <CardContent className="py-16 flex flex-col items-center text-center">
             <CheckCircle className="h-16 w-16 text-green-500 mb-4" />
-            <h3 className="text-xl font-bold text-slate-900">Import Complete!</h3>
-            <p className="text-sm text-slate-500 mt-2">Your leads have been imported successfully.</p>
+            <h3 className="text-xl font-bold text-slate-900">Import complete</h3>
+            {importedCampaign ? (
+              <p className="text-sm text-slate-500 mt-2 max-w-md">
+                {importedCount} leads are queued in <strong>{importedCampaign.name}</strong>.{' '}
+                {importedCampaign.sendingStatus === 'ACTIVE'
+                  ? 'The campaign is live, so they will start going out in the next send window, rotating across your inboxes.'
+                  : 'Launch the campaign and they will go out automatically, rotating across your inboxes.'}
+              </p>
+            ) : (
+              <p className="text-sm text-slate-500 mt-2">{importedCount} leads imported. Put them in a campaign to send automatically.</p>
+            )}
             <div className="flex gap-3 mt-6">
               <Button variant="outline" onClick={reset}><Upload className="h-4 w-4" />Import Another</Button>
-              <Button asChild><a href="/leads">View Leads</a></Button>
+              {importedCampaign
+                ? <Button asChild><a href="/campaigns">{importedCampaign.sendingStatus === 'ACTIVE' ? 'View campaign' : 'Go to Launch'}</a></Button>
+                : <Button asChild><a href="/leads">View Leads</a></Button>}
             </div>
           </CardContent>
         </Card>

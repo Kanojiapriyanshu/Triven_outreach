@@ -16,7 +16,9 @@ const settingsSchema = z.object({
   }).refine((w) => w.start < w.end, { message: 'Window end must be after start' }),
   followUpDays: z.tuple([z.number().int().min(1), z.number().int().min(1), z.number().int().min(1)]),
   dailyCapPerSender: z.number().int().min(1).max(500),
-})
+  minGapMinutes: z.number().int().min(1).max(240),
+  maxGapMinutes: z.number().int().min(1).max(240),
+}).refine((s) => s.minGapMinutes <= s.maxGapMinutes, { message: 'Minimum gap must be less than the maximum' })
 
 export async function GET() {
   const session = await requireAuth()

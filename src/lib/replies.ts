@@ -21,18 +21,29 @@ function header(msg: gmail_v1.Schema$Message, name: string) {
   return msg.payload?.headers?.find(h => h.name?.toLowerCase() === name.toLowerCase())?.value || ''
 }
 
+function isAutoReply(msg: gmail_v1.Schema$Message) {
+  const auto = header(msg, 'Auto-Submitted').toLowerCase()
+  if (auto && auto !== 'no') return true
+  if (header(msg, 'X-Autoreply') || header(msg, 'X-Autorespond')) return true
+  if (/^(auto_reply|bulk)$/i.test(header(msg, 'Precedence'))) return true
+  return /^(out of (the )?office|automatic reply|auto.?reply|autoreply|away from (the )?office|on vacation|abwesenheit)/i
+    .test(header(msg, 'Subject'))
+}
+
 /** Look at a thread in the sender's mailbox and decide whether someone answered. */
 export async function inspectThread(gmail: gmail_v1.Gmail, threadId: string, senderEmail: string): Promise<ThreadVerdict> {
   const thread = await gmail.users.threads.get({
     userId: 'me',
     id: threadId,
     format: 'metadata',
-    metadataHeaders: ['From', 'Subject'],
+    metadataHeaders: ['From', 'Subject', 'Auto-Submitted', 'X-Autoreply', 'X-Autorespond', 'Precedence'],
   })
   for (const msg of thread.data.messages ?? []) {
     const from = header(msg, 'From')
     const isOurs = msg.labelIds?.includes('SENT') || from.toLowerCase().includes(senderEmail.toLowerCase())
     if (isOurs) continue
+    // Out-of-office / vacation auto-replies are not real replies: keep the sequence going
+    if (isAutoReply(msg) && !BOUNCE_FROM.test(from)) continue
     const verdict = {
       from,
       snippet: msg.snippet || undefined,
@@ -153,8 +164,15 @@ export async function checkAllReplies(deadline: number) {
       select: { gmailThreadId: true, lead: true },
       orderBy: { sentAt: 'desc' },
       distinct: ['gmailThreadId'],
-      take: 150,
+      take: 300,
     })
+
+    // Shuffle: each run has a short time budget, so random order means every thread
+    // gets checked within a few runs instead of only the newest ones
+    for (let i = messages.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1))
+      ;[messages[i], messages[j]] = [messages[j], messages[i]]
+    }
 
     for (const m of messages) {
       if (Date.now() > deadline) break
@@ -176,7 +194,11 @@ export async function checkAllReplies(deadline: number) {
       const ids = list.data.messages?.map(x => x.id!).filter(Boolean) ?? []
       for (const id of ids) {
         if (Date.now() > deadline) break
-        const msg = await gmail.users.messages.get({ userId: 'me', id, format: 'metadata', metadataHeaders: ['From'] })
+        const msg = await gmail.users.messages.get({
+          userId: 'me', id, format: 'metadata',
+          metadataHeaders: ['From', 'Subject', 'Auto-Submitted', 'X-Autoreply', 'X-Autorespond', 'Precedence'],
+        })
+        if (isAutoReply(msg.data)) continue
         const fromEmail = header(msg.data, 'From').match(/[\w.+-]+@[\w-]+(\.[\w-]+)+/)?.[0]?.toLowerCase()
         if (!fromEmail) continue
         const lead = await prisma.lead.findFirst({ where: { companyEmail: fromEmail, hasReplied: false } })
