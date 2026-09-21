@@ -19,6 +19,7 @@ import {
 } from '@/components/ui/select'
 import { fmtDate, fmtDateTime, fmtCurrency, getDisplayName, STATUS_LABELS } from '@/lib/utils'
 import type { LeadRow } from '@/types'
+import { DEFAULT_SEND_WINDOW, fmtInZone, type SendWindow } from '@/lib/send-window'
 
 const fetcher = (url: string) => fetch(url).then((r) => r.json())
 
@@ -76,6 +77,8 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
   const [composeOpen, setComposeOpen] = useState(false)
   const [composeTask, setComposeTask] = useState<FollowUpTaskRow | null>(null)
   const [busyTask, setBusyTask]       = useState<string | null>(null)
+  const { data: settingsData } = useSWR<{ sendWindow: SendWindow }>('/api/settings', fetcher)
+  const sendWindow = settingsData?.sendWindow ?? DEFAULT_SEND_WINDOW
 
   if (!lead) return (
     <div className="flex items-center justify-center h-64 text-slate-400">
@@ -122,7 +125,7 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
     const res = await fetch(`/api/followups/${task.id}`, { method: 'POST' })
     const data = await res.json().catch(() => ({}))
     setBusyTask(null)
-    if (res.ok) toast.success('Follow-up sent')
+    if (res.ok) toast.success('Sent')
     else toast.error(data.error || 'Failed to send')
     mutate()
   }
@@ -149,7 +152,8 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
 
   const displayName = getDisplayName(lead)
   const tasks = (lead.followUpTasks || []).filter((t) => t.type.startsWith('FOLLOW_UP'))
-  const pendingTasks = tasks.filter((t) => t.status === 'PENDING')
+  const scheduledFirst = (lead.followUpTasks || []).find((t) => t.type === 'FIRST_EMAIL' && t.status === 'PENDING')
+  const pendingTasks = (lead.followUpTasks || []).filter((t) => t.status === 'PENDING')
 
   return (
     <div className="max-w-6xl mx-auto space-y-6">
@@ -338,16 +342,33 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
                   <p className="text-xs font-semibold text-slate-500 uppercase">First Email</p>
                   {lead.firstEmailSentAt
                     ? <Badge variant="success" className="text-xs">Sent {fmtDate(lead.firstEmailSentAt)}</Badge>
-                    : <Badge variant="secondary" className="text-xs">Not sent</Badge>}
+                    : scheduledFirst
+                      ? <Badge className="text-xs">Scheduled</Badge>
+                      : <Badge variant="secondary" className="text-xs">Not sent</Badge>}
                 </div>
                 {lead.firstEmailSentAt ? (
                   <>
                     <p className="text-sm font-medium text-slate-800">{lead.firstEmailSubject}</p>
                     {lead.firstEmailBody && <p className="text-xs text-slate-500 mt-1 line-clamp-2">{lead.firstEmailBody}</p>}
                   </>
+                ) : scheduledFirst ? (
+                  <>
+                    <p className="text-sm font-medium text-slate-800">{scheduledFirst.subject}</p>
+                    <p className="text-xs text-indigo-700 mt-1">
+                      Scheduled for {fmtInZone(scheduledFirst.scheduledAt, sendWindow)}
+                    </p>
+                    <div className="flex gap-1 mt-2 -ml-2">
+                      <Button size="sm" variant="ghost" className="h-7 text-xs" loading={busyTask === scheduledFirst.id} onClick={() => sendTaskNow(scheduledFirst)}>
+                        <Send className="h-3 w-3" />Send now
+                      </Button>
+                      <Button size="sm" variant="ghost" className="h-7 text-xs text-slate-400" onClick={stopFollowUps}>
+                        <StopCircle className="h-3 w-3" />Cancel
+                      </Button>
+                    </div>
+                  </>
                 ) : (
                   <div className="flex items-center justify-between gap-3">
-                    <p className="text-xs text-slate-400">Send the first email and follow-ups are scheduled automatically.</p>
+                    <p className="text-xs text-slate-400">Send or schedule the first email and follow-ups are planned automatically.</p>
                     <Button size="sm" onClick={() => { setComposeTask(null); setComposeOpen(true) }} disabled={!lead.companyEmail}>
                       <Send className="h-3.5 w-3.5" />Write email
                     </Button>
@@ -367,7 +388,9 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
                       <p className="text-xs font-semibold text-slate-500 uppercase">{task.type.replace(/_/g, ' ').replace('FOLLOW UP', 'Follow-up')}</p>
                       <div className="flex items-center gap-2">
                         <span className="text-xs text-slate-400">
-                          {task.status === 'SENT' ? fmtDateTime(task.sentAt) : fmtDate(task.scheduledAt, 'EEE, MMM d')}
+                          {task.status === 'SENT'
+                            ? fmtDateTime(task.sentAt)
+                            : task.status === 'PENDING' ? fmtInZone(task.scheduledAt, sendWindow) : fmtDate(task.scheduledAt, 'EEE, MMM d')}
                         </span>
                         <Badge variant={badge.variant} className="text-xs">{badge.label}</Badge>
                       </div>

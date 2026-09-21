@@ -13,6 +13,7 @@ export async function GET() {
   const tasks = await prisma.followUpTask.findMany({
     where: {
       status: 'PENDING',
+      type: { startsWith: 'FOLLOW_UP' },
       scheduledAt: { gte: todayStart, lte: todayEnd },
     },
     include: {
@@ -47,5 +48,17 @@ export async function GET() {
     orderBy: { createdAt: 'asc' },
   })
 
-  return NextResponse.json({ tasks, firstEmailLeads })
+  // Replies waiting for a human: detected automatically, follow-ups already stopped
+  const replies = await prisma.lead.findMany({
+    where: { status: 'REPLIED' },
+    include: {
+      campaign: { select: { id: true, name: true } },
+      senderAccount: { select: { id: true, displayName: true, email: true } },
+      emailMessages: { where: { direction: 'INBOUND' }, orderBy: { createdAt: 'desc' }, take: 1 },
+    },
+    orderBy: { lastResponseAt: 'desc' },
+    take: 50,
+  })
+
+  return NextResponse.json({ tasks, firstEmailLeads, replies })
 }

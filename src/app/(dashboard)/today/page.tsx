@@ -5,13 +5,13 @@ import Link from 'next/link'
 import { toast } from 'sonner'
 import {
   Send, Clock, AlertTriangle, CheckCircle, SkipForward, CalendarClock,
-  Mail, Users, PenLine,
+  Mail, Users, PenLine, MessageSquare,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { StatusBadge } from '@/components/leads/StatusBadge'
-import { fmtDate, getDisplayName } from '@/lib/utils'
+import { fmtDate, fmtRelative, getDisplayName } from '@/lib/utils'
 import { differenceInDays } from 'date-fns'
 import ComposeEmailDialog from '@/components/email/ComposeEmailDialog'
 import type { ComposeLead } from '@/components/email/ComposeEmailDialog'
@@ -40,6 +40,12 @@ interface Lead {
   senderAccountId?: string
   campaign?: { name: string } | null
   senderAccount?: { id: string; displayName: string; email: string } | null
+}
+
+interface ReplyLead extends Lead {
+  companyEmail?: string
+  lastResponseAt?: string
+  emailMessages?: Array<{ body?: string | null }>
 }
 
 // ─── TaskCard ─────────────────────────────────────────────────────────────────
@@ -122,13 +128,24 @@ export default function TodayPage() {
 
   const tasks:           FollowUpTask[] = todayData?.tasks          ?? []
   const firstEmailLeads: Lead[]         = todayData?.firstEmailLeads ?? []
-  const overdueTasks:    FollowUpTask[] = overdueData               ?? []
+  const overdueTasks:    FollowUpTask[] = Array.isArray(overdueData) ? overdueData : []
+  const replies:         ReplyLead[]    = todayData?.replies         ?? []
 
   const followUp1 = tasks.filter(t => t.type === 'FOLLOW_UP_1')
   const followUp2 = tasks.filter(t => t.type === 'FOLLOW_UP_2')
   const followUp3 = tasks.filter(t => t.type === 'FOLLOW_UP_3')
 
   function refresh() { mutateTasks(); mutateOverdue() }
+
+  async function setOutcome(leadId: string, status: string) {
+    await fetch(`/api/leads/${leadId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status }),
+    })
+    toast.success(`Marked ${status.replace(/_/g, ' ').toLowerCase()}`)
+    refresh()
+  }
 
   function openComposeForTask(task: FollowUpTask) {
     setComposeLead({
@@ -186,6 +203,50 @@ export default function TodayPage() {
           </div>
         ))}
       </div>
+
+      {/* Replies — follow-ups already stopped, a human takes it from here */}
+      {replies.length > 0 && (
+        <Card className="border-teal-200">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-teal-700">
+              <MessageSquare className="h-4 w-4" />Replies to handle ({replies.length})
+            </CardTitle>
+            <p className="text-xs text-slate-500">Follow-ups stopped automatically. Reply from Gmail, then mark the outcome.</p>
+          </CardHeader>
+          <CardContent className="pt-0 space-y-3">
+            {replies.map(lead => (
+              <div key={lead.id} className="flex flex-col sm:flex-row sm:items-start gap-3 p-4 rounded-xl border border-teal-100 bg-teal-50/40">
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <Link href={`/leads/${lead.id}`} className="font-semibold text-slate-900 hover:text-indigo-600 text-sm">
+                      {getDisplayName(lead)}
+                    </Link>
+                    <span className="text-sm text-slate-500">{lead.companyName}</span>
+                    {lead.campaign && <Badge variant="secondary" className="text-xs">{lead.campaign.name}</Badge>}
+                    {lead.lastResponseAt && <span className="text-xs text-slate-400">{fmtRelative(lead.lastResponseAt)}</span>}
+                  </div>
+                  {lead.emailMessages?.[0]?.body && (
+                    <p className="text-sm text-slate-700 mt-1.5 line-clamp-2">&ldquo;{lead.emailMessages[0].body}&rdquo;</p>
+                  )}
+                  <p className="text-xs text-slate-400 mt-1">
+                    {lead.companyEmail}{lead.senderAccount && <> · to {lead.senderAccount.email}</>}
+                  </p>
+                </div>
+                <div className="flex flex-wrap gap-1.5 shrink-0">
+                  <Button size="sm" variant="outline" asChild>
+                    <a href={`https://mail.google.com/mail/u/${lead.senderAccount?.email || 0}/#search/${encodeURIComponent(`from:${lead.companyEmail}`)}`} target="_blank" rel="noopener noreferrer">
+                      Open in Gmail
+                    </a>
+                  </Button>
+                  <Button size="sm" onClick={() => setOutcome(lead.id, 'INTERESTED')}>Interested</Button>
+                  <Button size="sm" variant="outline" onClick={() => setOutcome(lead.id, 'MEETING_BOOKED')}>Meeting booked</Button>
+                  <Button size="sm" variant="ghost" className="text-slate-500" onClick={() => setOutcome(lead.id, 'NOT_INTERESTED')}>Not interested</Button>
+                </div>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      )}
 
       {/* Overdue */}
       {overdueTasks.length > 0 && (
@@ -267,7 +328,7 @@ export default function TodayPage() {
         </Card>
       ))}
 
-      {firstEmailLeads.length === 0 && tasks.length === 0 && overdueTasks.length === 0 && (
+      {firstEmailLeads.length === 0 && tasks.length === 0 && overdueTasks.length === 0 && replies.length === 0 && (
         <Card>
           <CardContent className="py-16 flex flex-col items-center text-center">
             <CheckCircle className="h-12 w-12 text-green-500 mb-3" />

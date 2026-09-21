@@ -11,6 +11,7 @@ export interface TemplateLead {
   city?: string | null
   industry?: string | null
   website?: string | null
+  personalizationNotes?: string | null
 }
 
 export interface TemplateSender {
@@ -25,14 +26,17 @@ export const TEMPLATE_VARS = [
   { key: 'jobTitle',        label: 'Job title' },
   { key: 'city',            label: 'City' },
   { key: 'industry',        label: 'Industry' },
+  { key: 'personalNote',    label: 'Personal note' },
   { key: 'senderName',      label: 'Your name' },
   { key: 'senderFirstName', label: 'Your first name' },
 ] as const
 
 // Used when a variable has no value and the template gives no {{key|fallback}}
-const DEFAULT_FALLBACKS: Record<string, string> = {
-  firstName: 'there',
-  companyName: 'your team',
+const DEFAULT_FALLBACKS: Record<string, (vars: Record<string, string>) => string> = {
+  // "Hi Harrison Dental team," reads far better than "Hi there,"
+  firstName: (v) => (v.companyName ? `${v.companyName} team` : 'there'),
+  companyName: () => 'your team',
+  city: () => 'your area',
 }
 
 export function buildTemplateVars(lead: TemplateLead, sender?: TemplateSender | null): Record<string, string> {
@@ -48,18 +52,26 @@ export function buildTemplateVars(lead: TemplateLead, sender?: TemplateSender | 
     city:            lead.city || '',
     industry:        lead.industry || '',
     website:         lead.website || '',
+    personalNote:    lead.personalizationNotes?.trim() || '',
     senderName,
     senderFirstName: senderName.split(/\s+/)[0] || '',
     senderEmail:     sender?.email || '',
   }
 }
 
-/** Replace {{key}} and {{key|fallback}} placeholders. Unknown keys are left untouched. */
+/**
+ * Replace {{key}} and {{key|fallback}} placeholders. Unknown keys are left untouched.
+ * Lines left empty by a missing optional value (e.g. {{personalNote}}) are collapsed.
+ */
 export function renderTemplate(text: string, vars: Record<string, string>) {
-  return text.replace(/\{\{\s*(\w+)\s*(?:\|([^}]*))?\}\}/g, (match, key: string, fallback?: string) => {
-    if (!(key in vars)) return match
-    return vars[key] || fallback?.trim() || DEFAULT_FALLBACKS[key] || ''
-  })
+  return text
+    .replace(/\{\{\s*(\w+)\s*(?:\|([^}]*))?\}\}/g, (match, key: string, fallback?: string) => {
+      if (!(key in vars)) return match
+      return vars[key] || fallback?.trim() || DEFAULT_FALLBACKS[key]?.(vars) || ''
+    })
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
 }
 
 /** Best-effort company name from an email domain: "jane@brightsmile-dental.com" → "Brightsmile Dental" */
@@ -93,11 +105,3 @@ export function pickDefaultTemplate<T extends PickableTemplate>(templates: T[], 
   )
 }
 
-/** Move a date that lands on a weekend to the following Monday (same time of day). */
-export function skipWeekend(date: Date) {
-  const d = new Date(date)
-  const day = d.getDay()
-  if (day === 6) d.setDate(d.getDate() + 2)
-  if (day === 0) d.setDate(d.getDate() + 1)
-  return d
-}

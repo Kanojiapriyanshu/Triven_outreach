@@ -12,6 +12,7 @@ export async function GET() {
   const tasks = await prisma.followUpTask.findMany({
     where: {
       status: 'PENDING',
+      type: { startsWith: 'FOLLOW_UP' },
       scheduledAt: { lt: todayStart },
     },
     include: {

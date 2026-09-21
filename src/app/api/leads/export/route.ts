@@ -2,6 +2,16 @@ import { NextRequest, NextResponse } from 'next/server'
 import { requireAuth } from '@/lib/auth'
 import prisma from '@/lib/prisma'
 
+/** RFC 4180 cell: quote when needed, double embedded quotes, neutralise spreadsheet formulas */
+function cell(v: unknown) {
+  if (v == null) return ''
+  let s = v instanceof Date ? v.toISOString().slice(0, 16).replace('T', ' ') : String(v)
+  if (/^[=+\-@]/.test(s)) s = `'${s}`
+  return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
+}
+
+const yes = (b: boolean) => (b ? 'Yes' : 'No')
+
 export async function GET(req: NextRequest) {
   const session = await requireAuth()
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -15,7 +25,9 @@ export async function GET(req: NextRequest) {
   const where: Record<string, unknown> = {}
   if (q) where.OR = [
     { companyName: { contains: q, mode: 'insensitive' } },
+    { fullName: { contains: q, mode: 'insensitive' } },
     { companyEmail: { contains: q, mode: 'insensitive' } },
+    { website: { contains: q, mode: 'insensitive' } },
   ]
   if (status) where.status = status
   if (campaignId) where.campaignId = campaignId
@@ -25,50 +37,55 @@ export async function GET(req: NextRequest) {
     where,
     include: {
       campaign: { select: { name: true } },
-      senderAccount: { select: { email: true, displayName: true } },
+      senderAccount: { select: { email: true } },
     },
-    orderBy: { createdAt: 'desc' },
+    orderBy: [{ companyName: 'asc' }],
   })
 
-  const rows = [
-    // Headers
-    ['Full Name', 'Company', 'Email', 'Phone', 'Website', 'LinkedIn', 'Industry', 'Country', 'State', 'City',
-     'Campaign', 'Sender', 'Status', 'Priority', 'First Email Sent', 'FU1 Sent', 'FU2 Sent', 'FU3 Sent',
-     'Replied', 'Interested', 'Demo Sent', 'Meeting Booked', 'Sale', 'Deal Value', 'Notes', 'Created'].join(','),
-    ...leads.map((l) => [
-      `"${[l.firstName, l.lastName].filter(Boolean).join(' ') || l.fullName || ''}"`,
-      `"${l.companyName}"`,
-      l.companyEmail || '',
-      l.phone || '',
-      l.website || '',
-      l.linkedIn || '',
-      l.industry || '',
-      l.country || '',
-      l.state || '',
-      l.city || '',
-      `"${l.campaign?.name || ''}"`,
-      l.senderAccount?.email || '',
-      l.status,
-      l.priority,
-      l.firstEmailSentAt?.toISOString().slice(0, 10) || '',
-      l.followUp1SentAt?.toISOString().slice(0, 10) || '',
-      l.followUp2SentAt?.toISOString().slice(0, 10) || '',
-      l.followUp3SentAt?.toISOString().slice(0, 10) || '',
-      l.hasReplied ? 'Yes' : 'No',
-      l.isInterested ? 'Yes' : 'No',
-      l.demoSent ? 'Yes' : 'No',
-      l.meetingBooked ? 'Yes' : 'No',
-      l.hasSale ? 'Yes' : 'No',
-      l.dealValue?.toString() || '',
-      `"${(l.notes || '').replace(/"/g, '""')}"`,
-      l.createdAt.toISOString().slice(0, 10),
-    ].join(',')),
-  ].join('\n')
+  const columns: Array<[string, (l: typeof leads[number]) => unknown]> = [
+    ['Company', (l) => l.companyName],
+    ['Contact', (l) => l.fullName || [l.firstName, l.lastName].filter(Boolean).join(' ')],
+    ['First Name', (l) => l.firstName],
+    ['Email', (l) => l.companyEmail],
+    ['Phone', (l) => l.phone],
+    ['Website', (l) => l.website],
+    ['City', (l) => l.city],
+    ['State', (l) => l.state],
+    ['Country', (l) => l.country],
+    ['Industry', (l) => l.industry],
+    ['Niche / Campaign', (l) => l.campaign?.name],
+    ['Sender', (l) => l.senderAccount?.email],
+    ['Status', (l) => l.status.replace(/_/g, ' ')],
+    ['Priority', (l) => l.priority],
+    ['First Email Sent', (l) => l.firstEmailSentAt],
+    ['Follow-up 1 Sent', (l) => l.followUp1SentAt],
+    ['Follow-up 2 Sent', (l) => l.followUp2SentAt],
+    ['Follow-up 3 Sent', (l) => l.followUp3SentAt],
+    ['Next Scheduled', (l) => l.nextFollowUpAt],
+    ['Last Contacted', (l) => l.lastContactedAt],
+    ['Replied', (l) => yes(l.hasReplied)],
+    ['Replied At', (l) => l.lastResponseAt],
+    ['Interested', (l) => yes(l.isInterested)],
+    ['Meeting Booked', (l) => yes(l.meetingBooked)],
+    ['Won', (l) => yes(l.hasSale)],
+    ['Deal Value', (l) => l.dealValue?.toString()],
+    ['Why This Lead', (l) => l.whyThisLead],
+    ['Personal Note', (l) => l.personalizationNotes],
+    ['Notes', (l) => l.notes],
+    ['Source', (l) => l.leadSource],
+    ['Created', (l) => l.createdAt],
+  ]
 
-  return new NextResponse(rows, {
+  const csv = [
+    columns.map(([h]) => cell(h)).join(','),
+    ...leads.map((l) => columns.map(([, get]) => cell(get(l))).join(',')),
+  ].join('\r\n')
+
+  // BOM so Excel opens UTF-8 (names with accents, em dashes) correctly
+  return new NextResponse('﻿' + csv, {
     headers: {
-      'Content-Type': 'text/csv',
-      'Content-Disposition': `attachment; filename="leads-${new Date().toISOString().slice(0, 10)}.csv"`,
+      'Content-Type': 'text/csv; charset=utf-8',
+      'Content-Disposition': `attachment; filename="triven-leads-${new Date().toISOString().slice(0, 10)}.csv"`,
     },
   })
 }

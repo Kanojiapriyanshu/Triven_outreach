@@ -3,7 +3,7 @@ import { useState, useEffect, useRef, useMemo } from 'react'
 import Link from 'next/link'
 import useSWR from 'swr'
 import { toast } from 'sonner'
-import { Send, Eye, EyeOff, Repeat, Info } from 'lucide-react'
+import { Send, Eye, EyeOff, Repeat, Info, Clock } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -17,6 +17,7 @@ import {
   TEMPLATE_VARS, FOLLOW_UP_TYPES, buildTemplateVars, renderTemplate,
   guessCompanyFromEmail, pickDefaultTemplate,
 } from '@/lib/template'
+import { DEFAULT_SEND_WINDOW, describeWindow, fmtInZone, windowInZone, type SendWindow } from '@/lib/send-window'
 
 const fetcher = (url: string) => fetch(url).then(r => r.json())
 
@@ -83,6 +84,9 @@ export default function ComposeEmailDialog({
   const [body, setBody]       = useState(defaultBody)
   const [preview, setPreview] = useState(false)
   const [sending, setSending] = useState(false)
+  // Schedule instead of sending now
+  const [showSchedule, setShowSchedule] = useState(false)
+  const [customAt, setCustomAt] = useState('')
   const [followUps, setFollowUps] = useState<FollowUpRow[]>(
     DEFAULT_DELAYS.map(d => ({ enabled: true, templateId: AUTO, delayDays: d })),
   )
@@ -92,6 +96,9 @@ export default function ComposeEmailDialog({
   const { data: sendersData }   = useSWR<Sender[]>('/api/sender-accounts', fetcher)
   const { data: templatesData } = useSWR<Template[]>('/api/templates', fetcher)
   const { data: campaignsData } = useSWR<Campaign[]>('/api/campaigns', fetcher)
+  const { data: settingsData }  = useSWR<{ sendWindow: SendWindow; followUpDays: number[] }>('/api/settings', fetcher)
+  const sendWindow = settingsData?.sendWindow ?? DEFAULT_SEND_WINDOW
+  const defaultDelays = settingsData?.followUpDays ?? DEFAULT_DELAYS
   const senders   = Array.isArray(sendersData) ? sendersData : []
   const templates = useMemo(() => Array.isArray(templatesData) ? templatesData : [], [templatesData])
   const campaigns = Array.isArray(campaignsData) ? campaignsData : []
@@ -110,17 +117,24 @@ export default function ComposeEmailDialog({
   // Follow-up timing follows the campaign schedule when there is one
   useEffect(() => {
     const c = campaigns.find(x => x.id === campaignId)
-    const days = c ? [c.followUpDay1, c.followUpDay2, c.followUpDay3] : DEFAULT_DELAYS
+    const days = c ? [c.followUpDay1, c.followUpDay2, c.followUpDay3] : defaultDelays
     setFollowUps(rows => rows.map((r, i) => ({ ...r, delayDays: days[i] || DEFAULT_DELAYS[i] })))
-  }, [campaignId, campaignsData]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [campaignId, campaignsData, settingsData]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Auto-load the best matching template once, if the editor is empty
+  // Auto-load the niche's default template; switch it when the niche changes, unless the user edited it
+  const autoBody = useRef('')
   useEffect(() => {
-    if (autoLoaded.current || !templatesData || body.trim()) return
+    if (!templatesData) return
+    const untouched = !body.trim() || body === autoBody.current
+    if (autoLoaded.current && !untouched) return
+    if (!autoLoaded.current && body.trim()) { autoLoaded.current = true; return }
     autoLoaded.current = true
     const t = pickDefaultTemplate(mainTemplates, templateType, campaignId)
-    if (t) applyTemplate(t, false)
-  }, [templatesData]) // eslint-disable-line react-hooks/exhaustive-deps
+    if (t) {
+      applyTemplate(t, false)
+      autoBody.current = t.body
+    }
+  }, [templatesData, campaignId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const recipient = isNewLead
     ? { firstName: toFirstName, companyName: toCompany || guessCompanyFromEmail(toEmail), companyEmail: toEmail }
@@ -157,7 +171,8 @@ export default function ComposeEmailDialog({
     setFollowUps(rows => rows.map((r, j) => (j === i ? { ...r, ...patch } : r)))
   }
 
-  async function handleSend() {
+  /** schedule: undefined = send now, 'window' = next send window, ISO string = exact time */
+  async function handleSend(schedule?: string) {
     if (isNewLead && !/^\S+@\S+\.\S+$/.test(toEmail.trim())) return toast.error('Enter a valid email address')
     if (!from) return toast.error('Select a sender account')
     if (!isFollowUp && !subject.trim()) return toast.error('Subject is required')
@@ -192,6 +207,7 @@ export default function ComposeEmailDialog({
             body,
             type: isFirstEmail ? 'FIRST_EMAIL' : 'OTHER',
             followUps: plan,
+            scheduleAt: schedule,
           }),
         })
       }
@@ -200,7 +216,8 @@ export default function ComposeEmailDialog({
       if (!res.ok) throw new Error(data.error || 'Failed to send')
 
       const n = data.followUpsScheduled
-      toast.success(n ? `Email sent · ${n} follow-up${n > 1 ? 's' : ''} scheduled` : 'Email sent')
+      const fu = n ? ` · ${n} follow-up${n > 1 ? 's' : ''} planned` : ''
+      toast.success(data.scheduledAt ? `Scheduled for ${fmtInZone(data.scheduledAt, sendWindow)}${fu}` : `Email sent${fu}`)
       onSent?.(data.leadId || lead?.id)
       onClose()
     } catch (err) {
@@ -459,25 +476,60 @@ export default function ComposeEmailDialog({
               </div>
               <p className="flex items-start gap-1.5 px-4 py-2 bg-slate-50 border-t border-slate-200 text-xs text-slate-500">
                 <Info className="h-3.5 w-3.5 mt-px shrink-0" />
-                Sent as replies in the same thread, on weekdays. {!hasFollowUpTemplates && 'Tip: add Follow-up 1–3 templates once and they are used automatically.'}
+                Sent as replies in the same thread, weekdays {describeWindow(sendWindow)} ({windowInZone(sendWindow, 'America/New_York')} US Eastern, {windowInZone(sendWindow, 'Europe/London')} UK). {!hasFollowUpTemplates && 'Tip: add Follow-up 1–3 templates once and they are used automatically.'}
               </p>
             </div>
           )}
         </div>
 
         {/* ── Footer ─────────────────────────────────────────────────────────── */}
+        {showSchedule && !isFollowUp && (
+          <div className="px-6 py-3 border-t border-slate-100 bg-indigo-50/60 space-y-2 shrink-0">
+            <p className="text-xs font-medium text-slate-600">Schedule this email</p>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button size="sm" variant="outline" disabled={sending} onClick={() => handleSend('window')}>
+                <Clock className="h-3.5 w-3.5" />Next send window ({describeWindow(sendWindow)})
+              </Button>
+              <span className="text-xs text-slate-400">or</span>
+              <input
+                type="datetime-local"
+                value={customAt}
+                onChange={e => setCustomAt(e.target.value)}
+                className="h-8 rounded-lg border border-slate-300 bg-white px-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              />
+              <Button
+                size="sm"
+                disabled={!customAt || sending}
+                onClick={() => handleSend(new Date(customAt).toISOString())}
+              >
+                Schedule
+              </Button>
+            </div>
+            <p className="text-[11px] text-slate-400">Custom times use your computer&apos;s clock. Follow-ups are planned from the scheduled time.</p>
+          </div>
+        )}
         <div className="px-6 py-3.5 border-t border-slate-100 bg-slate-50 flex items-center justify-between shrink-0">
           <span className="text-xs text-slate-400 hidden sm:inline">Ctrl + Enter to send</span>
           <div className="flex gap-2 ml-auto">
             <Button variant="outline" size="sm" onClick={onClose}>Cancel</Button>
+            {!isFollowUp && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setShowSchedule(s => !s)}
+                disabled={(!isNewLead && !lead.companyEmail) || connectedSenders.length === 0}
+              >
+                <Clock className="h-3.5 w-3.5" />Schedule
+              </Button>
+            )}
             <Button
               size="sm"
-              onClick={handleSend}
+              onClick={() => handleSend()}
               loading={sending}
               disabled={(!isNewLead && !lead.companyEmail) || connectedSenders.length === 0}
             >
               <Send className="h-3.5 w-3.5" />
-              Send
+              Send now
             </Button>
           </div>
         </div>

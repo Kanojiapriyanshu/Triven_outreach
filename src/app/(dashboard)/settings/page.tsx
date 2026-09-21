@@ -1,166 +1,228 @@
 'use client'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
+import useSWR from 'swr'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import {
-  Shield, Database, Mail, Bell, Globe, AlertTriangle,
-} from 'lucide-react'
+import { Clock, Shield, Repeat, Trash2 } from 'lucide-react'
+import { DEFAULT_SEND_WINDOW, describeWindow, windowInZone, type SendWindow } from '@/lib/send-window'
+import { fmtDate } from '@/lib/utils'
+
+const fetcher = (url: string) => fetch(url).then((r) => r.json())
+
+interface Settings {
+  sendWindow: SendWindow
+  followUpDays: [number, number, number]
+  dailyCapPerSender: number
+}
+
+const DEFAULTS: Settings = { sendWindow: DEFAULT_SEND_WINDOW, followUpDays: [3, 7, 14], dailyCapPerSender: 40 }
+
+const ZONES = [
+  { tz: 'Asia/Kolkata', label: 'India (IST)' },
+  { tz: 'Europe/London', label: 'UK (GMT/BST)' },
+  { tz: 'America/New_York', label: 'US Eastern' },
+  { tz: 'America/Chicago', label: 'US Central' },
+  { tz: 'America/Denver', label: 'US Mountain' },
+  { tz: 'America/Los_Angeles', label: 'US Pacific' },
+]
+
+/** What the window looks like for the people receiving the email */
+function recipientTimes(w: SendWindow) {
+  return ZONES.filter((z) => z.tz !== w.timezone && z.tz !== 'America/Denver')
+    .map((z) => `${z.label}: ${windowInZone(w, z.tz)}`)
+}
 
 export default function SettingsPage() {
+  const { data, mutate } = useSWR<Settings>('/api/settings', fetcher)
+  const { data: suppression, mutate: mutateSuppression } = useSWR<Array<{ id: string; email?: string; domain?: string; reason?: string; addedAt: string }>>('/api/suppression', fetcher)
+  const [form, setForm] = useState<Settings>(DEFAULTS)
   const [saving, setSaving] = useState(false)
+  const [blockValue, setBlockValue] = useState('')
+
+  useEffect(() => { if (data && 'sendWindow' in data) setForm(data) }, [data])
+
+  function setWindow(patch: Partial<SendWindow>) {
+    setForm((f) => ({ ...f, sendWindow: { ...f.sendWindow, ...patch } }))
+  }
 
   async function handleSave() {
     setSaving(true)
-    await new Promise((r) => setTimeout(r, 800))
-    toast.success('Settings saved')
-    setSaving(false)
+    try {
+      const res = await fetch('/api/settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(form),
+      })
+      const d = await res.json().catch(() => ({}))
+      if (!res.ok) return toast.error(d.error || 'Could not save settings')
+      toast.success('Settings saved')
+      mutate()
+    } finally { setSaving(false) }
   }
+
+  async function addBlock() {
+    const res = await fetch('/api/suppression', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ value: blockValue }),
+    })
+    const d = await res.json().catch(() => ({}))
+    if (!res.ok) return toast.error(d.error || 'Could not add')
+    toast.success(d.leadsStopped ? `Blocked · ${d.leadsStopped} lead(s) stopped` : 'Blocked')
+    setBlockValue('')
+    mutateSuppression()
+  }
+
+  async function removeBlock(id: string) {
+    await fetch(`/api/suppression?id=${id}`, { method: 'DELETE' })
+    mutateSuppression()
+  }
+
+  const w = form.sendWindow
 
   return (
     <div className="max-w-3xl space-y-6">
-      <h1 className="text-xl font-bold text-slate-900">Settings</h1>
+      <div>
+        <h1 className="text-xl font-bold text-slate-900">Settings</h1>
+        <p className="text-sm text-slate-500">How and when your outreach goes out.</p>
+      </div>
+
+      {/* Sending window */}
+      <Card>
+        <CardHeader>
+          <div className="flex items-center gap-2">
+            <Clock className="h-4 w-4 text-indigo-600" />
+            <CardTitle>Sending Window</CardTitle>
+          </div>
+          <CardDescription>
+            Follow-ups and &ldquo;send in window&rdquo; emails go out at random times inside this window. Emails you send yourself go immediately.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div>
+              <Label>Your timezone</Label>
+              <select
+                value={w.timezone}
+                onChange={(e) => setWindow({ timezone: e.target.value })}
+                className="mt-1 h-9 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              >
+                {ZONES.map((z) => <option key={z.tz} value={z.tz}>{z.label}</option>)}
+              </select>
+            </div>
+            <div>
+              <Label>From</Label>
+              <Input type="time" value={w.start} onChange={(e) => setWindow({ start: e.target.value })} className="mt-1" />
+            </div>
+            <div>
+              <Label>Until</Label>
+              <Input
+                type="time"
+                value={w.end === '24:00' ? '00:00' : w.end}
+                onChange={(e) => setWindow({ end: e.target.value === '00:00' ? '24:00' : e.target.value })}
+                className="mt-1"
+              />
+            </div>
+          </div>
+          <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={w.skipWeekends}
+              onChange={(e) => setWindow({ skipWeekends: e.target.checked })}
+              className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+            />
+            Don&apos;t send on Saturdays and Sundays
+          </label>
+          <div className="rounded-lg bg-indigo-50 border border-indigo-100 px-3 py-2.5 text-xs text-indigo-900 space-y-0.5">
+            <p className="font-medium">Window: {describeWindow(w)}. Your prospects receive it at:</p>
+            {recipientTimes(w).map((line) => <p key={line}>{line}</p>)}
+          </div>
+          <div className="max-w-xs">
+            <Label>Daily limit per Gmail account</Label>
+            <Input
+              type="number"
+              min={1}
+              max={500}
+              value={form.dailyCapPerSender}
+              onChange={(e) => setForm((f) => ({ ...f, dailyCapPerSender: Number(e.target.value) || 1 }))}
+              className="mt-1"
+            />
+            <p className="text-xs text-slate-400 mt-1">Automatic sends only. New Gmail accounts should start around 20–30 a day to protect deliverability.</p>
+          </div>
+        </CardContent>
+      </Card>
 
       {/* Follow-up defaults */}
       <Card>
         <CardHeader>
           <div className="flex items-center gap-2">
-            <Bell className="h-4 w-4 text-indigo-600" />
+            <Repeat className="h-4 w-4 text-indigo-600" />
             <CardTitle>Default Follow-up Schedule</CardTitle>
           </div>
-          <CardDescription>
-            These are global defaults. Campaign-level settings override these.
-          </CardDescription>
+          <CardDescription>Days after the first email. A campaign&apos;s own schedule overrides this, and you can change it per email.</CardDescription>
         </CardHeader>
         <CardContent>
           <div className="grid grid-cols-3 gap-4">
-            {['Follow-up 1 (days after email)', 'Follow-up 2 (days after email)', 'Follow-up 3 (days after email)'].map((label, i) => (
+            {form.followUpDays.map((d, i) => (
               <div key={i}>
-                <Label>{label}</Label>
-                <Input type="number" min={1} defaultValue={i + 1} className="mt-1" />
+                <Label>Follow-up {i + 1}</Label>
+                <Input
+                  type="number"
+                  min={1}
+                  value={d}
+                  onChange={(e) => {
+                    const days = [...form.followUpDays] as Settings['followUpDays']
+                    days[i] = Math.max(1, Number(e.target.value) || 1)
+                    setForm((f) => ({ ...f, followUpDays: days }))
+                  }}
+                  className="mt-1"
+                />
               </div>
             ))}
           </div>
         </CardContent>
       </Card>
 
-      {/* Timezone */}
-      <Card>
-        <CardHeader>
-          <div className="flex items-center gap-2">
-            <Globe className="h-4 w-4 text-indigo-600" />
-            <CardTitle>Default Timezone</CardTitle>
-          </div>
-        </CardHeader>
-        <CardContent>
-          <div className="max-w-xs">
-            <Label>Timezone</Label>
-            <Input defaultValue="America/New_York" className="mt-1" placeholder="America/New_York" />
-            <p className="text-xs text-slate-400 mt-1">Used for scheduling follow-ups when no campaign timezone is set.</p>
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Gmail OAuth */}
-      <Card>
-        <CardHeader>
-          <div className="flex items-center gap-2">
-            <Mail className="h-4 w-4 text-indigo-600" />
-            <CardTitle>Gmail API Configuration</CardTitle>
-          </div>
-          <CardDescription>
-            OAuth credentials for Gmail API. Set these in your <code>.env</code> file.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="space-y-3 text-sm">
-            <div className="bg-slate-50 rounded-lg border border-slate-200 p-4 font-mono text-xs space-y-1">
-              <p className="text-slate-600">GOOGLE_CLIENT_ID=<span className="text-indigo-600">your-client-id.apps.googleusercontent.com</span></p>
-              <p className="text-slate-600">GOOGLE_CLIENT_SECRET=<span className="text-indigo-600">your-client-secret</span></p>
-              <p className="text-slate-600">GOOGLE_REDIRECT_URI=<span className="text-indigo-600">http://localhost:3000/api/gmail/callback</span></p>
-            </div>
-            <p className="text-xs text-slate-500">
-              Create credentials at{' '}
-              <a href="https://console.cloud.google.com/" target="_blank" rel="noopener noreferrer" className="text-indigo-600 hover:underline">
-                Google Cloud Console
-              </a>. Enable the Gmail API and add your redirect URI as an authorized redirect.
-            </p>
-          </div>
-        </CardContent>
-      </Card>
+      <div className="flex justify-end">
+        <Button onClick={handleSave} loading={saving}>Save Settings</Button>
+      </div>
 
       {/* Suppression list */}
       <Card>
         <CardHeader>
           <div className="flex items-center gap-2">
             <Shield className="h-4 w-4 text-indigo-600" />
-            <CardTitle>Suppression List</CardTitle>
+            <CardTitle>Do-not-contact List</CardTitle>
           </div>
           <CardDescription>
-            Emails and domains that will never receive outreach
+            Nobody here is ever emailed. Bounced addresses are added automatically. Blocking a domain covers everyone at it.
           </CardDescription>
         </CardHeader>
-        <CardContent>
-          <div className="space-y-3">
-            <div>
-              <Label>Add Email / Domain</Label>
-              <div className="flex gap-2 mt-1">
-                <Input placeholder="noreply@example.com or example.com" className="flex-1" />
-                <Button variant="outline" size="sm">Add</Button>
-              </div>
+        <CardContent className="space-y-3">
+          <form onSubmit={(e) => { e.preventDefault(); addBlock() }} className="flex gap-2">
+            <Input value={blockValue} onChange={(e) => setBlockValue(e.target.value)} placeholder="someone@example.com or example.com" className="flex-1" />
+            <Button type="submit" variant="outline" size="sm" disabled={!blockValue.trim()}>Block</Button>
+          </form>
+          {Array.isArray(suppression) && suppression.length > 0 && (
+            <div className="divide-y divide-slate-100 rounded-lg border border-slate-200 max-h-64 overflow-y-auto">
+              {suppression.map((s) => (
+                <div key={s.id} className="flex items-center justify-between px-3 py-2 text-sm">
+                  <span className="font-mono text-xs text-slate-700">{s.email || s.domain}</span>
+                  <div className="flex items-center gap-3">
+                    <span className="text-xs text-slate-400">{(s.reason || '').replace(/_/g, ' ').toLowerCase()} · {fmtDate(s.addedAt)}</span>
+                    <button onClick={() => removeBlock(s.id)} className="text-slate-300 hover:text-red-500" title="Remove">
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                </div>
+              ))}
             </div>
-            <p className="text-xs text-slate-400">
-              Adding a domain blocks all emails to that domain. Used for bounced, unsubscribed, and do-not-contact addresses.
-            </p>
-          </div>
+          )}
         </CardContent>
       </Card>
-
-      {/* Database */}
-      <Card>
-        <CardHeader>
-          <div className="flex items-center gap-2">
-            <Database className="h-4 w-4 text-indigo-600" />
-            <CardTitle>Database</CardTitle>
-          </div>
-        </CardHeader>
-        <CardContent className="text-sm space-y-2">
-          <p className="text-slate-600">Using <strong>Neon PostgreSQL</strong> via Prisma ORM.</p>
-          <p className="text-xs text-slate-400">Connection string is set in DATABASE_URL environment variable.</p>
-          <div className="bg-green-50 border border-green-200 rounded-lg p-3 text-green-800 text-xs flex items-center gap-2">
-            <div className="h-2 w-2 rounded-full bg-green-500" />
-            Database connection active
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Compliance */}
-      <Card>
-        <CardHeader>
-          <div className="flex items-center gap-2">
-            <AlertTriangle className="h-4 w-4 text-amber-600" />
-            <CardTitle>Compliance</CardTitle>
-          </div>
-        </CardHeader>
-        <CardContent className="text-sm text-slate-600 space-y-2">
-          <p>This CRM is built for responsible B2B outreach. It respects:</p>
-          <ul className="list-disc pl-4 space-y-1 text-xs">
-            <li>CAN-SPAM Act – unsubscribe requests are honored immediately</li>
-            <li>CASL – do-not-contact status is enforced</li>
-            <li>Gmail sending limits – configured daily targets per account</li>
-            <li>Suppression list – prevents mailing to opted-out addresses</li>
-          </ul>
-          <p className="text-xs text-slate-400 mt-2">
-            Always include a way for recipients to opt out of future communications.
-          </p>
-        </CardContent>
-      </Card>
-
-      <div className="flex justify-end">
-        <Button onClick={handleSave} loading={saving}>Save Settings</Button>
-      </div>
     </div>
   )
 }

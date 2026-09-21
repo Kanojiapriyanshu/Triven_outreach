@@ -106,15 +106,10 @@ function LeadsPageInner() {
     mutate()
   }
 
-  async function handleExport() {
-    const res = await fetch(`/api/leads/export?${new URLSearchParams({ q, status, campaignId, senderAccountId }).toString()}`)
-    const blob = await res.blob()
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `leads-${new Date().toISOString().slice(0, 10)}.csv`
-    a.click()
-    URL.revokeObjectURL(url)
+  function handleExport() {
+    // Let the browser download the attachment directly (works in every browser, incl. Safari)
+    window.location.href = `/api/leads/export?${new URLSearchParams({ q, status, campaignId, senderAccountId }).toString()}`
+    toast.success(`Exporting ${total.toLocaleString()} leads…`)
   }
 
   return (

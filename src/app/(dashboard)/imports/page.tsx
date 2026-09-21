@@ -13,70 +13,9 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select'
 import { fmtDate } from '@/lib/utils'
+import { IMPORT_FIELDS, autoMapColumns, duplicateTargets } from '@/lib/import-mapping'
 
 const fetcher = (url: string) => fetch(url).then((r) => r.json())
-
-const DB_FIELDS = [
-  { value: '', label: '— Skip —' },
-  { value: 'companyName', label: 'Company Name' },
-  { value: 'firstName', label: 'First Name' },
-  { value: 'lastName', label: 'Last Name' },
-  { value: 'fullName', label: 'Full Name' },
-  { value: 'jobTitle', label: 'Job Title' },
-  { value: 'companyEmail', label: 'Email' },
-  { value: 'phone', label: 'Phone' },
-  { value: 'website', label: 'Website' },
-  { value: 'linkedIn', label: 'LinkedIn' },
-  { value: 'industry', label: 'Industry' },
-  { value: 'country', label: 'Country' },
-  { value: 'state', label: 'State' },
-  { value: 'city', label: 'City' },
-  { value: 'companySize', label: 'Company Size' },
-  { value: 'senderAccount', label: 'Sender Gmail (email)' },
-  { value: 'status', label: 'Status' },
-  { value: 'priority', label: 'Priority' },
-  { value: 'notes', label: 'Notes' },
-  { value: 'personalizationNotes', label: 'Personalization Notes' },
-  { value: 'companyPainPoint', label: 'Pain Point' },
-  { value: 'whyThisLead', label: 'Why This Lead' },
-  { value: 'firstEmailSubject', label: 'First Email Subject' },
-  { value: 'firstEmailBody', label: 'First Email Body' },
-  { value: 'firstEmailSentAt', label: 'First Email Sent Date' },
-  { value: 'followUp1SentAt', label: 'Follow-up 1 Sent Date' },
-  { value: 'followUp2SentAt', label: 'Follow-up 2 Sent Date' },
-  { value: 'followUp3SentAt', label: 'Follow-up 3 Sent Date' },
-]
-
-// Auto-detect column mapping by header name
-function autoDetect(col: string): string {
-  const c = col.toLowerCase().replace(/[^a-z0-9]/g, '')
-  if (/company|bizname|businessname/.test(c)) return 'companyName'
-  if (/firstname|first/.test(c)) return 'firstName'
-  if (/lastname|last/.test(c)) return 'lastName'
-  if (/fullname|name/.test(c)) return 'fullName'
-  if (/jobtitle|title|role/.test(c)) return 'jobTitle'
-  if (/email/.test(c)) return 'companyEmail'
-  if (/phone|mobile|cell/.test(c)) return 'phone'
-  if (/website|url|domain/.test(c)) return 'website'
-  if (/linkedin/.test(c)) return 'linkedIn'
-  if (/industry|sector/.test(c)) return 'industry'
-  if (/country/.test(c)) return 'country'
-  if (/state|province/.test(c)) return 'state'
-  if (/city|location/.test(c)) return 'city'
-  if (/size|employees/.test(c)) return 'companySize'
-  if (/sender|gmail|from/.test(c)) return 'senderAccount'
-  if (/status/.test(c)) return 'status'
-  if (/priority/.test(c)) return 'priority'
-  if (/note/.test(c)) return 'notes'
-  if (/personal|personali/.test(c)) return 'personalizationNotes'
-  if (/pain/.test(c)) return 'companyPainPoint'
-  if (/firstemailsentfirstsent/.test(c) || /firstdate/.test(c)) return 'firstEmailSentAt'
-  if (/firstemail/.test(c)) return 'firstEmailSubject'
-  if (/followup1date|fu1date|followup1sent/.test(c)) return 'followUp1SentAt'
-  if (/followup2date|fu2date|followup2sent/.test(c)) return 'followUp2SentAt'
-  if (/followup3date|fu3date|followup3sent/.test(c)) return 'followUp3SentAt'
-  return ''
-}
 
 type Step = 'upload' | 'map' | 'validate' | 'confirm' | 'done'
 
@@ -88,7 +27,15 @@ export default function ImportsPage() {
   const [preview, setPreview] = useState<{ importId: string; columns: string[]; sampleRows: Record<string, string>[]; totalRows: number } | null>(null)
   const [columnMapping, setColumnMapping] = useState<Record<string, string>>({})
   const [validating, setValidating] = useState(false)
-  const [validation, setValidation] = useState<{ totalRows: number; validRows: number; duplicateRows: number; errorRows: number; missingEmail: number; unknownSender: number } | null>(null)
+  const [validation, setValidation] = useState<{
+    totalRows: number; validRows: number; duplicateRows: number; errorRows: number
+    missingEmail: number; unknownSender: number; sampleErrors?: Array<{ row: number; message: string }>
+  } | null>(null)
+  const { data: campaigns } = useSWR('/api/campaigns', fetcher)
+  const { data: senders } = useSWR('/api/sender-accounts', fetcher)
+  const [campaignId, setCampaignId] = useState('')
+  const [senderChoice, setSenderChoice] = useState('rotate')
+  const dupFields = duplicateTargets(columnMapping)
   const [importing, setImporting] = useState(false)
   const [duplicateAction, setDuplicateAction] = useState<'skip' | 'update'>('skip')
   const fileRef = useRef<HTMLInputElement>(null)
@@ -105,11 +52,7 @@ export default function ImportsPage() {
       if (!res.ok) return toast.error(data.error || 'Upload failed')
       setPreview(data)
       // Auto-detect mappings
-      const detected: Record<string, string> = {}
-      for (const col of data.columns) {
-        detected[col] = autoDetect(col)
-      }
-      setColumnMapping(detected)
+      setColumnMapping(autoMapColumns(data.columns))
       setStep('map')
       mutate()
     } finally {
@@ -142,11 +85,15 @@ export default function ImportsPage() {
       const res = await fetch(`/api/imports/${preview.importId}/process`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ duplicateAction }),
+        body: JSON.stringify({
+          duplicateAction,
+          campaignId: campaignId || undefined,
+          senderAccountId: senderChoice === 'none' ? undefined : senderChoice,
+        }),
       })
       const data = await res.json()
       if (!res.ok) return toast.error(data.error)
-      toast.success(`Imported ${data.importedRows} leads!`)
+      toast.success(`Imported ${data.importedRows} leads`)
       setStep('done')
       mutate()
     } finally {
@@ -225,10 +172,13 @@ export default function ImportsPage() {
                       )}
                     </div>
                     <ArrowRight className="h-4 w-4 text-slate-300 shrink-0" />
-                    <Select value={columnMapping[col] || ''} onValueChange={(v) => setColumnMapping((prev) => ({ ...prev, [col]: v }))}>
-                      <SelectTrigger className="flex-1"><SelectValue placeholder="Skip this column" /></SelectTrigger>
+                    <Select value={columnMapping[col] || 'SKIP'} onValueChange={(v) => setColumnMapping((prev) => ({ ...prev, [col]: v === 'SKIP' ? '' : v }))}>
+                      <SelectTrigger className={`flex-1 ${dupFields.includes(columnMapping[col]) ? 'border-red-400 ring-1 ring-red-200' : ''} ${!columnMapping[col] ? 'text-slate-400' : ''}`}>
+                        <SelectValue />
+                      </SelectTrigger>
                       <SelectContent>
-                        {DB_FIELDS.map((f) => <SelectItem key={f.value} value={f.value}>{f.label}</SelectItem>)}
+                        <SelectItem value="SKIP">— Skip this column —</SelectItem>
+                        {IMPORT_FIELDS.map((f) => <SelectItem key={f.value} value={f.value}>{f.label}</SelectItem>)}
                       </SelectContent>
                     </Select>
                   </div>
@@ -263,9 +213,14 @@ export default function ImportsPage() {
               )}
             </CardContent>
           </Card>
+          {dupFields.length > 0 && (
+            <p className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+              Two columns point at the same field ({dupFields.map((f) => IMPORT_FIELDS.find((x) => x.value === f)?.label || f).join(', ')}). Set one of them to Skip.
+            </p>
+          )}
           <div className="flex gap-3 justify-end">
             <Button variant="outline" onClick={reset}>Cancel</Button>
-            <Button onClick={handleValidate} loading={validating}>Validate Mapping</Button>
+            <Button onClick={handleValidate} loading={validating} disabled={dupFields.length > 0}>Check Rows</Button>
           </div>
         </div>
       )}
@@ -278,12 +233,12 @@ export default function ImportsPage() {
             <CardContent>
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 mb-6">
                 {[
-                  { label: 'Total Rows', value: validation.totalRows, color: 'text-slate-900' },
-                  { label: '✓ Valid', value: validation.validRows, color: 'text-green-600' },
-                  { label: '⚠ Duplicates', value: validation.duplicateRows, color: 'text-amber-600' },
-                  { label: '✗ Errors', value: validation.errorRows, color: 'text-red-600' },
-                  { label: 'Missing Email', value: validation.missingEmail, color: 'text-orange-600' },
-                  { label: 'Unknown Sender', value: validation.unknownSender, color: 'text-purple-600' },
+                  { label: 'Rows in file', value: validation.totalRows, color: 'text-slate-900' },
+                  { label: 'Ready to import', value: validation.validRows, color: 'text-green-600' },
+                  { label: 'Already in CRM', value: validation.duplicateRows, color: 'text-amber-600' },
+                  { label: 'Will be skipped', value: validation.errorRows, color: 'text-red-600' },
+                  { label: 'No email (imported, can\'t be emailed yet)', value: validation.missingEmail, color: 'text-orange-600' },
+                  { label: 'Unknown sender in file', value: validation.unknownSender, color: 'text-purple-600' },
                 ].map(({ label, value, color }) => (
                   <div key={label} className="bg-slate-50 rounded-lg p-3 text-center">
                     <p className={`text-2xl font-bold ${color}`}>{value}</p>
@@ -294,12 +249,12 @@ export default function ImportsPage() {
 
               {validation.duplicateRows > 0 && (
                 <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 mb-4">
-                  <p className="text-sm font-medium text-amber-800 mb-2">How to handle duplicates?</p>
+                  <p className="text-sm font-medium text-amber-800 mb-2">{validation.duplicateRows} lead(s) are already in the CRM. What should happen?</p>
                   <div className="flex gap-3">
                     {(['skip', 'update'] as const).map((a) => (
                       <label key={a} className="flex items-center gap-2 cursor-pointer">
                         <input type="radio" name="dupAction" value={a} checked={duplicateAction === a} onChange={() => setDuplicateAction(a)} className="text-indigo-600" />
-                        <span className="text-sm text-amber-800 capitalize">{a === 'skip' ? 'Skip duplicates (safe)' : 'Update existing (never overwrites outreach history)'}</span>
+                        <span className="text-sm text-amber-800">{a === 'skip' ? 'Skip them (safe)' : 'Fill in missing details on the existing leads'}</span>
                       </label>
                     ))}
                   </div>
@@ -307,10 +262,40 @@ export default function ImportsPage() {
               )}
 
               {validation.errorRows > 0 && (
-                <p className="text-xs text-slate-500">
-                  {validation.errorRows} rows have errors and will be skipped. You can still import the {validation.validRows + validation.duplicateRows} valid rows.
-                </p>
+                <div className="text-xs text-slate-500 mb-4 space-y-1">
+                  <p>{validation.errorRows} row(s) will be skipped:</p>
+                  {(validation.sampleErrors || []).map((e) => <p key={e.row} className="text-red-600">Row {e.row}: {e.message}</p>)}
+                </div>
               )}
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-4 border-t border-slate-100">
+                <div>
+                  <p className="text-xs font-medium text-slate-500 mb-1">Niche / campaign</p>
+                  <Select value={campaignId || 'NONE'} onValueChange={(v) => setCampaignId(v === 'NONE' ? '' : v)}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="NONE">No niche (General templates)</SelectItem>
+                      {(Array.isArray(campaigns) ? campaigns : []).map((c: { id: string; name: string }) => (
+                        <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-slate-400 mt-1">Leads use this niche&apos;s email templates.</p>
+                </div>
+                <div>
+                  <p className="text-xs font-medium text-slate-500 mb-1">Send from</p>
+                  <Select value={senderChoice} onValueChange={setSenderChoice}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="rotate">Spread across connected Gmail accounts</SelectItem>
+                      <SelectItem value="none">Decide when sending</SelectItem>
+                      {(Array.isArray(senders) ? senders : []).map((s: { id: string; displayName: string; email: string }) => (
+                        <SelectItem key={s.id} value={s.id}>{s.displayName} ({s.email})</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
             </CardContent>
           </Card>
           <div className="flex gap-3 justify-end">

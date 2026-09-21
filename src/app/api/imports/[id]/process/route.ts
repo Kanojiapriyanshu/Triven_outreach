@@ -1,20 +1,25 @@
 import { NextRequest, NextResponse } from 'next/server'
+import type { Prisma } from '@prisma/client'
+import { z } from 'zod'
 import { requireAuth } from '@/lib/auth'
 import prisma from '@/lib/prisma'
-import { addDays, parseISO, isValid } from 'date-fns'
+import { parseISO, isValid } from 'date-fns'
+import { mapRow } from '@/lib/import-mapping'
 
-function parseDate(v?: string): Date | undefined {
+const processSchema = z.object({
+  duplicateAction: z.enum(['skip', 'update']).default('skip'),
+  // Niche the leads go into (their templates are used automatically)
+  campaignId: z.string().optional(),
+  // A sender id, or "rotate" to spread leads across connected Gmail accounts
+  senderAccountId: z.string().optional(),
+})
+
+function parseDate(v?: string) {
   if (!v) return undefined
   const d = parseISO(v)
-  return isValid(d) ? d : undefined
-}
-
-function inferStatus(mapped: Record<string, string>): string {
-  if (mapped['followUp3SentAt']) return 'FOLLOW_UP_3_SENT'
-  if (mapped['followUp2SentAt']) return 'FOLLOW_UP_2_SENT'
-  if (mapped['followUp1SentAt']) return 'FOLLOW_UP_1_SENT'
-  if (mapped['firstEmailSentAt']) return 'FIRST_EMAIL_SENT'
-  return mapped['status'] || 'NEW'
+  if (isValid(d)) return d
+  const loose = new Date(v)
+  return isValid(loose) ? loose : undefined
 }
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
@@ -22,114 +27,97 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   const { id } = await params
-  const { duplicateAction = 'skip' } = await req.json() // skip | update | create
+  const parsed = processSchema.safeParse(await req.json().catch(() => ({})))
+  if (!parsed.success) return NextResponse.json({ error: 'Invalid import options' }, { status: 400 })
+  const { duplicateAction, campaignId, senderAccountId } = parsed.data
 
-  const importRecord = await prisma.import.findUnique({
-    where: { id },
-    include: { rows: { where: { status: { in: ['VALID', 'DUPLICATE'] } } } },
-  })
+  const importRecord = await prisma.import.findUnique({ where: { id } })
   if (!importRecord) return NextResponse.json({ error: 'Not found' }, { status: 404 })
-
-  const columnMapping = importRecord.columnMapping as Record<string, string>
-  const senderAccounts = await prisma.senderAccount.findMany({
-    select: { id: true, email: true },
+  const columnMapping = (importRecord.columnMapping || {}) as Record<string, string>
+  const rows = await prisma.importRow.findMany({
+    where: { importId: id, status: { in: ['VALID', 'DUPLICATE'] } },
+    orderBy: { rowNumber: 'asc' },
   })
-  const senderByEmail = new Map(senderAccounts.map((s) => [s.email.toLowerCase(), s]))
+
+  const campaign = campaignId ? await prisma.campaign.findUnique({ where: { id: campaignId } }) : null
+  const allSenders = await prisma.senderAccount.findMany({ select: { id: true, email: true, gmailStatus: true } })
+  const senderByEmail = new Map(allSenders.map((s) => [s.email.toLowerCase(), s.id]))
+  const rotation = allSenders.filter((s) => s.gmailStatus === 'CONNECTED').map((s) => s.id)
+  let turn = 0
+  const pickSender = (fromSheet?: string) => {
+    if (fromSheet && senderByEmail.has(fromSheet)) return senderByEmail.get(fromSheet)
+    if (senderAccountId === 'rotate') return rotation.length ? rotation[turn++ % rotation.length] : undefined
+    return senderAccountId || undefined
+  }
 
   await prisma.import.update({ where: { id }, data: { status: 'IMPORTING' } })
 
-  let importedRows = 0
+  const toCreate: Prisma.LeadCreateManyInput[] = []
+  const createdRowIds: string[] = []
+  let updated = 0
 
-  for (const row of importRecord.rows) {
+  for (const row of rows) {
     if (row.status === 'DUPLICATE' && duplicateAction === 'skip') continue
+    const { data, senderEmail } = mapRow(row.rawData as Record<string, unknown>, columnMapping)
+    const firstSentAt = parseDate(data.firstEmailSentAt)
 
-    const data = row.rawData as Record<string, string>
-    const mapped: Record<string, string> = {}
-    for (const [csvCol, dbField] of Object.entries(columnMapping)) {
-      if (dbField && data[csvCol] !== undefined) mapped[dbField] = data[csvCol]
-    }
-
-    const email = mapped['companyEmail']?.toLowerCase().trim() || undefined
-    const senderEmail = mapped['senderAccount']?.toLowerCase().trim()
-    const senderAccount = senderEmail ? senderByEmail.get(senderEmail) : undefined
-
-    const inferredStatus = inferStatus(mapped)
-    const fu3SentAt = parseDate(mapped['followUp3SentAt'])
-    const fu2SentAt = parseDate(mapped['followUp2SentAt'])
-    const fu1SentAt = parseDate(mapped['followUp1SentAt'])
-    const firstSentAt = parseDate(mapped['firstEmailSentAt'])
-
-    // Compute next follow-up
-    let nextFollowUpAt: Date | undefined
-    if (inferredStatus === 'FIRST_EMAIL_SENT' && firstSentAt) nextFollowUpAt = addDays(firstSentAt, 1)
-    else if (inferredStatus === 'FOLLOW_UP_1_SENT' && fu1SentAt) nextFollowUpAt = addDays(fu1SentAt, 1)
-    else if (inferredStatus === 'FOLLOW_UP_2_SENT' && fu2SentAt) nextFollowUpAt = addDays(fu2SentAt, 1)
-
-    const leadData = {
-      companyName: mapped['companyName'] || data['Company'] || 'Unknown',
-      fullName: mapped['fullName'] || undefined,
-      firstName: mapped['firstName'] || undefined,
-      lastName: mapped['lastName'] || undefined,
-      jobTitle: mapped['jobTitle'] || undefined,
-      companyEmail: email,
-      website: mapped['website'] || undefined,
-      phone: mapped['phone'] || undefined,
-      linkedIn: mapped['linkedIn'] || undefined,
-      country: mapped['country'] || undefined,
-      state: mapped['state'] || undefined,
-      city: mapped['city'] || undefined,
-      industry: mapped['industry'] || undefined,
-      companySize: mapped['companySize'] || undefined,
-      notes: mapped['notes'] || undefined,
-      status: inferredStatus,
-      priority: mapped['priority'] || 'MEDIUM',
-      leadSource: 'IMPORT' as const,
-      senderAccountId: senderAccount?.id || undefined,
-      firstEmailSubject: mapped['firstEmailSubject'] || undefined,
-      firstEmailBody: mapped['firstEmailBody'] || undefined,
+    const lead = {
+      companyName: data.companyName || data.companyEmail?.split('@')[1] || 'Unknown',
+      companyEmail: data.companyEmail,
+      firstName: data.firstName,
+      lastName: data.lastName,
+      fullName: data.fullName,
+      jobTitle: data.jobTitle,
+      phone: data.phone,
+      website: data.website,
+      linkedIn: data.linkedIn,
+      industry: data.industry || campaign?.industry || undefined,
+      city: data.city,
+      state: data.state,
+      country: data.country,
+      companySize: data.companySize,
+      priority: data.priority || 'MEDIUM',
+      status: firstSentAt ? 'FIRST_EMAIL_SENT' : data.status || 'NEW',
+      notes: data.notes,
+      personalizationNotes: data.personalizationNotes,
+      whyThisLead: data.whyThisLead,
+      companyPainPoint: data.companyPainPoint,
+      socialMediaNotes: data.socialMediaNotes,
       firstEmailSentAt: firstSentAt,
-      followUp1SentAt: fu1SentAt,
-      followUp2SentAt: fu2SentAt,
-      followUp3SentAt: fu3SentAt,
-      lastContactedAt: fu3SentAt || fu2SentAt || fu1SentAt || firstSentAt,
-      nextFollowUpAt,
-      personalizationNotes: mapped['personalizationNotes'] || undefined,
+      lastContactedAt: firstSentAt,
+      campaignId: campaign?.id,
+      senderAccountId: pickSender(senderEmail),
+      leadSource: 'IMPORT',
+      assignedUserId: session.userId,
     }
 
-    try {
-      if (row.status === 'DUPLICATE' && duplicateAction === 'update' && email) {
-        const existing = await prisma.lead.findFirst({ where: { companyEmail: email } })
-        if (existing) {
-          // Never overwrite existing outreach history
-          await prisma.lead.update({
-            where: { id: existing.id },
-            data: {
-              ...leadData,
-              firstEmailSentAt: existing.firstEmailSentAt || leadData.firstEmailSentAt,
-              followUp1SentAt: existing.followUp1SentAt || leadData.followUp1SentAt,
-              followUp2SentAt: existing.followUp2SentAt || leadData.followUp2SentAt,
-              followUp3SentAt: existing.followUp3SentAt || leadData.followUp3SentAt,
-            },
-          })
-          await prisma.importRow.update({ where: { id: row.id }, data: { status: 'IMPORTED', leadId: existing.id } })
-          importedRows++
-          continue
-        }
+    if (row.status === 'DUPLICATE' && data.companyEmail) {
+      const existing = await prisma.lead.findFirst({ where: { companyEmail: data.companyEmail } })
+      if (existing) {
+        // Fill gaps only — never overwrite outreach history or anything already set
+        const patch = Object.fromEntries(
+          Object.entries(lead).filter(([k, v]) => v !== undefined && (existing as Record<string, unknown>)[k] == null),
+        )
+        await prisma.lead.update({ where: { id: existing.id }, data: patch })
+        await prisma.importRow.update({ where: { id: row.id }, data: { status: 'IMPORTED', leadId: existing.id } })
+        updated++
+        continue
       }
-
-      const lead = await prisma.lead.create({ data: leadData })
-      await prisma.importRow.update({ where: { id: row.id }, data: { status: 'IMPORTED', leadId: lead.id } })
-      importedRows++
-    } catch (err) {
-      console.error('[import/process row]', err)
-      await prisma.importRow.update({ where: { id: row.id }, data: { status: 'ERROR', errorMsg: 'Insert failed' } })
     }
+    toCreate.push(lead)
+    createdRowIds.push(row.id)
   }
 
-  await prisma.import.update({
-    where: { id },
-    data: { status: 'COMPLETED', importedRows },
-  })
+  // Bulk insert in chunks
+  for (let i = 0; i < toCreate.length; i += 500) {
+    await prisma.lead.createMany({ data: toCreate.slice(i, i + 500) })
+  }
+  if (createdRowIds.length) {
+    await prisma.importRow.updateMany({ where: { id: { in: createdRowIds } }, data: { status: 'IMPORTED' } })
+  }
 
-  return NextResponse.json({ ok: true, importedRows })
+  const importedRows = toCreate.length + updated
+  await prisma.import.update({ where: { id }, data: { status: 'COMPLETED', importedRows } })
+
+  return NextResponse.json({ ok: true, importedRows, created: toCreate.length, updated })
 }

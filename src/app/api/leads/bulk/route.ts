@@ -3,7 +3,8 @@ import { z } from 'zod'
 import { requireAuth } from '@/lib/auth'
 import prisma from '@/lib/prisma'
 import { addDays } from 'date-fns'
-import { skipWeekend } from '@/lib/template'
+import { nextWindowSlot } from '@/lib/send-window'
+import { getSettings } from '@/lib/settings'
 import { refreshNextFollowUp } from '@/lib/followups'
 
 const bulkSchema = z.object({
@@ -46,6 +47,7 @@ export async function POST(req: NextRequest) {
         where: { leadId: { in: leadIds }, status: 'CANCELLED' },
         orderBy: { scheduledAt: 'asc' },
       })
+      const { sendWindow } = await getSettings()
       const firstByLead = new Map<string, number>()
       const start = addDays(new Date(), 1).getTime()
       for (const t of tasks) {
@@ -53,7 +55,7 @@ export async function POST(req: NextRequest) {
         const offset = t.scheduledAt.getTime() - firstByLead.get(t.leadId)!
         await prisma.followUpTask.update({
           where: { id: t.id },
-          data: { status: 'PENDING', scheduledAt: skipWeekend(new Date(start + offset)) },
+          data: { status: 'PENDING', scheduledAt: nextWindowSlot(new Date(start + offset), sendWindow) },
         })
       }
       for (const leadId of firstByLead.keys()) await refreshNextFollowUp(leadId)

@@ -30,8 +30,12 @@ export async function POST(req: NextRequest) {
 
     if (fileType === 'CSV') {
       const Papa = (await import('papaparse')).default
-      const text = buffer.toString('utf-8')
-      const result = Papa.parse<Record<string, string>>(text, { header: true, skipEmptyLines: true })
+      const text = buffer.toString('utf-8').replace(/^﻿/, '') // strip Excel's BOM
+      const result = Papa.parse<Record<string, string>>(text, {
+        header: true,
+        skipEmptyLines: 'greedy',
+        transformHeader: (h) => h.trim(),
+      })
       rows = result.data
       columns = result.meta.fields || []
     } else {
@@ -52,7 +56,8 @@ export async function POST(req: NextRequest) {
         const obj: Record<string, string> = {}
         row.eachCell((cell, colNum) => {
           const col = columns[colNum - 1]
-          if (col) obj[col] = cell.value != null ? String(cell.value) : ''
+          // cell.text is the displayed value (handles hyperlinks, rich text, formulas and dates)
+          if (col) obj[col] = cell.value instanceof Date ? cell.value.toISOString() : (cell.text ?? '').trim()
         })
         rows.push(obj)
       })

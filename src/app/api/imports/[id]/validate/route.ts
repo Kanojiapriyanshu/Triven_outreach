@@ -1,96 +1,89 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { requireAuth } from '@/lib/auth'
 import prisma from '@/lib/prisma'
+import { mapRow, duplicateTargets } from '@/lib/import-mapping'
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const session = await requireAuth()
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   const { id } = await params
-  const { columnMapping } = await req.json()
-  // columnMapping: { csvColumn: dbField, ... }
+  const { columnMapping } = await req.json() as { columnMapping: Record<string, string> }
 
-  const importRecord = await prisma.import.findUnique({
-    where: { id },
-    include: { rows: { take: 2000 } },
-  })
-  if (!importRecord) return NextResponse.json({ error: 'Not found' }, { status: 404 })
-
-  // Save column mapping
-  await prisma.import.update({ where: { id }, data: { columnMapping, status: 'VALIDATING' } })
-
-  // Get sender accounts for lookup
-  const senderAccounts = await prisma.senderAccount.findMany({
-    select: { id: true, email: true, displayName: true },
-  })
-  const senderByEmail = new Map(senderAccounts.map((s) => [s.email.toLowerCase(), s]))
-
-  let validRows = 0, duplicateRows = 0, errorRows = 0
-  let missingEmail = 0, unknownSender = 0, invalidDates = 0
-
-  const updates: Array<{ id: string; status: string; errorMsg?: string }> = []
-
-  for (const row of importRecord.rows) {
-    const data = row.rawData as Record<string, string>
-    const mapped: Record<string, string> = {}
-
-    for (const [csvCol, dbField] of Object.entries(columnMapping as Record<string, string>)) {
-      if (dbField && data[csvCol] !== undefined) {
-        mapped[dbField] = data[csvCol]
-      }
-    }
-
-    const email = mapped['companyEmail']?.toLowerCase().trim()
-    const senderEmail = mapped['senderAccount']?.toLowerCase().trim()
-
-    let status = 'VALID'
-    const errors: string[] = []
-
-    if (!mapped['companyName']?.trim()) errors.push('Missing company name')
-    if (!email) { missingEmail++; errors.push('Missing email') }
-
-    if (email) {
-      const dupe = await prisma.lead.findFirst({ where: { companyEmail: email } })
-      if (dupe) { duplicateRows++; status = 'DUPLICATE'; errors.push('Duplicate email') }
-    }
-
-    if (senderEmail && !senderByEmail.has(senderEmail)) {
-      unknownSender++; errors.push(`Unknown sender: ${senderEmail}`)
-    }
-
-    // Validate dates
-    const dateFields = ['firstEmailSentAt', 'followUp1SentAt', 'followUp2SentAt', 'followUp3SentAt']
-    for (const f of dateFields) {
-      if (mapped[f] && isNaN(Date.parse(mapped[f]))) {
-        invalidDates++; errors.push(`Invalid date in ${f}`)
-      }
-    }
-
-    if (errors.length > 0 && status !== 'DUPLICATE') status = 'ERROR'
-    if (status === 'ERROR') errorRows++
-    else if (status === 'VALID') validRows++
-
-    updates.push({ id: row.id, status, errorMsg: errors.join('; ') || undefined })
+  const dupes = duplicateTargets(columnMapping || {})
+  if (dupes.length) {
+    return NextResponse.json({ error: `More than one column is mapped to: ${dupes.join(', ')}. Pick one.` }, { status: 400 })
+  }
+  if (!Object.values(columnMapping).some((f) => f === 'companyEmail' || f === 'companyName')) {
+    return NextResponse.json({ error: 'Map at least an Email or a Company column' }, { status: 400 })
   }
 
-  // Batch update rows
-  for (const u of updates) {
-    await prisma.importRow.update({ where: { id: u.id }, data: { status: u.status, errorMsg: u.errorMsg } })
+  const importRecord = await prisma.import.findUnique({ where: { id } })
+  if (!importRecord) return NextResponse.json({ error: 'Not found' }, { status: 404 })
+  const rows = await prisma.importRow.findMany({ where: { importId: id }, orderBy: { rowNumber: 'asc' }, take: 10000 })
+
+  await prisma.import.update({ where: { id }, data: { columnMapping, status: 'VALIDATING' } })
+
+  const mapped = rows.map((r) => ({ row: r, m: mapRow(r.rawData as Record<string, unknown>, columnMapping) }))
+
+  // One query for all duplicates against existing leads
+  const emails = [...new Set(mapped.map((x) => x.m.data.companyEmail).filter(Boolean) as string[])]
+  const existing = new Set(
+    (await prisma.lead.findMany({ where: { companyEmail: { in: emails } }, select: { companyEmail: true } }))
+      .map((l) => l.companyEmail!),
+  )
+  const senders = new Set((await prisma.senderAccount.findMany({ select: { email: true } })).map((s) => s.email.toLowerCase()))
+
+  const seenInFile = new Set<string>()
+  const groups = new Map<string, string[]>() // "STATUS|message" → row ids
+  const stats = { validRows: 0, duplicateRows: 0, errorRows: 0, missingEmail: 0, unknownSender: 0, inFileDuplicates: 0 }
+  const sampleErrors: Array<{ row: number; message: string }> = []
+
+  for (const { row, m } of mapped) {
+    const email = m.data.companyEmail
+    let status = 'VALID'
+    const notes = [...m.warnings]
+
+    if (m.errors.length) {
+      status = 'ERROR'
+      notes.unshift(...m.errors)
+    } else if (email && existing.has(email)) {
+      status = 'DUPLICATE'
+      notes.unshift('Already in CRM')
+    } else if (email && seenInFile.has(email)) {
+      status = 'ERROR'
+      notes.unshift('Same email appears earlier in this file')
+      stats.inFileDuplicates++
+    }
+    if (email) seenInFile.add(email)
+    if (!email) stats.missingEmail++
+    if (m.senderEmail && !senders.has(m.senderEmail)) {
+      stats.unknownSender++
+      notes.push(`Unknown sender ${m.senderEmail} (will use the one you pick)`)
+    }
+
+    if (status === 'VALID') stats.validRows++
+    else if (status === 'DUPLICATE') stats.duplicateRows++
+    else {
+      stats.errorRows++
+      if (sampleErrors.length < 5) sampleErrors.push({ row: row.rowNumber, message: notes[0] })
+    }
+
+    const key = `${status}|${notes.join('; ')}`
+    groups.set(key, [...(groups.get(key) || []), row.id])
+  }
+
+  for (const [key, ids] of groups) {
+    const sep = key.indexOf('|')
+    const status = key.slice(0, sep)
+    const msg = key.slice(sep + 1)
+    await prisma.importRow.updateMany({ where: { id: { in: ids } }, data: { status, errorMsg: msg || null } })
   }
 
   await prisma.import.update({
     where: { id },
-    data: { status: 'READY', validRows, duplicateRows, errorRows },
+    data: { status: 'READY', validRows: stats.validRows, duplicateRows: stats.duplicateRows, errorRows: stats.errorRows },
   })
 
-  return NextResponse.json({
-    importId: id,
-    totalRows: importRecord.rows.length,
-    validRows,
-    duplicateRows,
-    errorRows,
-    missingEmail,
-    unknownSender,
-    invalidDates,
-  })
+  return NextResponse.json({ importId: id, totalRows: rows.length, ...stats, sampleErrors })
 }

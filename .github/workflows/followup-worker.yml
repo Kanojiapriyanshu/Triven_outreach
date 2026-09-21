@@ -1,40 +1,45 @@
-name: Follow-up Worker
+name: Outreach Worker
 
 on:
   schedule:
-    # Runs every 30 minutes — adjust to your sending cadence
-    - cron: '*/30 * * * *'
-  workflow_dispatch: # also allow manual trigger
+    # Every 15 minutes: check Gmail for replies/bounces, then send what's due.
+    # Follow-ups only go out inside the send window set in Settings (default 9 PM–12 AM IST).
+    - cron: '*/15 * * * *'
+  workflow_dispatch: # manual "Run workflow" button
+
+concurrency:
+  group: outreach-worker
+  cancel-in-progress: false
 
 jobs:
-  process-followups:
-    name: Process Pending Follow-ups
+  tick:
+    name: Check replies & send due emails
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 3
 
     steps:
-      - name: Trigger follow-up worker
+      - name: Run worker tick
+        env:
+          APP_URL: ${{ secrets.APP_URL }}
+          WORKER_SECRET: ${{ secrets.WORKER_SECRET }}
         run: |
-          echo "Triggering follow-up processing at $(date -u)"
-          RESPONSE=$(curl -s -w "\n%{http_code}" \
-            -X POST "${{ secrets.APP_URL }}/api/worker" \
+          if [ -z "$APP_URL" ] || [ -z "$WORKER_SECRET" ]; then
+            echo "::error::Set the APP_URL and WORKER_SECRET repository secrets"
+            exit 1
+          fi
+
+          RESPONSE=$(curl -sS --max-time 90 -w "\n%{http_code}" \
+            -X POST "${APP_URL%/}/api/worker" \
             -H "Content-Type: application/json" \
-            -H "x-worker-secret: ${{ secrets.WORKER_SECRET }}" \
-            -d '{"action":"process_followups"}')
+            -H "x-worker-secret: $WORKER_SECRET" \
+            -d '{"action":"tick"}')
 
           HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
           BODY=$(echo "$RESPONSE" | head -n-1)
-
           echo "HTTP $HTTP_CODE"
           echo "$BODY"
 
           if [ "$HTTP_CODE" != "200" ]; then
-            echo "Worker failed with HTTP $HTTP_CODE"
+            echo "::error::Worker returned HTTP $HTTP_CODE"
             exit 1
           fi
-
-          # Parse and display results
-          SENT=$(echo "$BODY" | grep -o '"sent":[0-9]*' | grep -o '[0-9]*')
-          SKIPPED=$(echo "$BODY" | grep -o '"skipped":[0-9]*' | grep -o '[0-9]*')
-          FAILED=$(echo "$BODY" | grep -o '"failed":[0-9]*' | grep -o '[0-9]*')
-          echo "✅ Sent: $SENT | Skipped: $SKIPPED | Failed: $FAILED"

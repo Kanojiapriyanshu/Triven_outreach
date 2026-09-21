@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 import { requireAuth } from '@/lib/auth'
 import prisma from '@/lib/prisma'
-import { sendFollowUpTask, refreshNextFollowUp } from '@/lib/followups'
+import { sendTask, refreshNextFollowUp } from '@/lib/followups'
 
 const patchSchema = z.object({
   status: z.enum(['PENDING', 'SKIPPED', 'CANCELLED']).optional(),
@@ -23,7 +23,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   return NextResponse.json(task)
 }
 
-// POST /api/followups/:id – send the follow-up now (as a reply in the original thread)
+// POST /api/followups/:id – send a queued task now (follow-ups reply in the original thread)
 // Accepts an optional { body } override so the user can edit before sending
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const session = await requireAuth()
@@ -36,8 +36,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   } catch { /* no body – use the stored or default template */ }
 
   const { id } = await params
-  const result = await sendFollowUpTask(id, { bodyOverride, userId: session.userId })
+  const result = await sendTask(id, { bodyOverride, userId: session.userId })
 
   if (result.outcome === 'sent') return NextResponse.json({ ok: true, gmailMessageId: result.gmailMessageId })
-  return NextResponse.json({ error: result.reason }, { status: result.outcome === 'skipped' ? 400 : 500 })
+  return NextResponse.json({ error: result.reason }, { status: result.outcome === 'failed' ? 500 : 400 })
 }
