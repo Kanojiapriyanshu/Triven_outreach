@@ -36,23 +36,46 @@ export const TEMPLATE_VARS = [
   { key: 'personalNote',    label: 'Personal note' },
   { key: 'senderName',      label: 'Your name' },
   { key: 'senderFirstName', label: 'Your first name' },
+  { key: 'demoPhone',       label: 'Demo phone number' },
 ] as const
 
 // Used when a variable has no value and the template gives no {{key|fallback}}
 const DEFAULT_FALLBACKS: Record<string, (vars: Record<string, string>) => string> = {
   // "Hi Harrison Dental team," reads far better than "Hi there,"
   firstName: (v) => (v.companyName ? `${v.companyName} team` : 'there'),
-  companyName: () => 'your team',
+  companyName: (v) => (/dent|ortho|clinic|medical|spa/i.test(v.industry) ? 'your practice' : 'your business'),
   city: () => 'your area',
 }
 
-export function buildTemplateVars(lead: TemplateLead, sender?: TemplateSender | null): Record<string, string> {
+// Parts of an email address that are never a person's name
+const NOT_A_NAME = /^(info|office|front|frontdesk|reception|receptionist|hello|hi|contact|admin|appointments?|appts?|team|care|smiles?|mail|email|enquiries|inquiries|patients?|schedul\w*|booking|bookings|dental|dentist|dentistry|clinic|family|ortho|practice|support|sales|billing|accounts?|manager|marketing|help|noreply|no-reply|the|and|dr)$/i
+
+/**
+ * Best guess at a first name from an address, only for unambiguous patterns:
+ * "john.smith@" → John, "sarah_k@" → Sarah, "drpatel@" / "dr.patel@" → Dr. Patel.
+ * Anything else ("harrisondental@", "info@") returns nothing.
+ */
+export function nameFromEmail(email?: string | null): { firstName?: string; doctor?: string } {
+  const local = (email || '').split('@')[0]?.toLowerCase().replace(/\d+$/, '') || ''
+  const cap = (w: string) => w.charAt(0).toUpperCase() + w.slice(1)
+  const dr = local.match(/^dr[._-]?([a-z]{3,15})$/)
+  if (dr && !NOT_A_NAME.test(dr[1])) return { doctor: `Dr. ${cap(dr[1])}` }
+  const parts = local.split(/[._-]/).filter(Boolean)
+  if (parts.length >= 2 && /^[a-z]{2,15}$/.test(parts[0]) && !NOT_A_NAME.test(parts[0]) && !parts.some((p) => NOT_A_NAME.test(p))) {
+    return { firstName: cap(parts[0]) }
+  }
+  return {}
+}
+
+export function buildTemplateVars(lead: TemplateLead, sender?: TemplateSender | null, extras: { demoPhone?: string } = {}): Record<string, string> {
   const nameParts = (lead.fullName || '').trim().split(/\s+/).filter(Boolean)
   const senderName = sender?.displayName || ''
-  const firstName = lead.firstName || (/^dr\.?$/i.test(nameParts[0] || '') ? '' : nameParts[0]) || ''
+  const fromEmail = !lead.firstName && !lead.fullName ? nameFromEmail(lead.companyEmail) : {}
+  const firstName = lead.firstName || (/^dr\.?$/i.test(nameParts[0] || '') ? '' : nameParts[0]) || fromEmail.firstName || ''
+  const leadForSignals = fromEmail.doctor ? { ...lead, fullName: fromEmail.doctor } : lead
   return {
     // Research-driven personalisation: {{name}}, {{hook}}, {{gapLine}}, {{forwardLine}} …
-    ...signalVars(lead, firstName),
+    ...signalVars(leadForSignals, firstName),
     firstName,
     lastName:        lead.lastName || nameParts.slice(1).join(' ') || '',
     fullName:        lead.fullName || [lead.firstName, lead.lastName].filter(Boolean).join(' '),
@@ -66,6 +89,7 @@ export function buildTemplateVars(lead: TemplateLead, sender?: TemplateSender | 
     senderName,
     senderFirstName: senderName.split(/\s+/)[0] || '',
     senderEmail:     sender?.email || '',
+    demoPhone:       extras.demoPhone?.trim() || '',
   }
 }
 
@@ -76,7 +100,14 @@ export function buildTemplateVars(lead: TemplateLead, sender?: TemplateSender | 
 export function renderTemplate(text: string, vars: Record<string, string>) {
   const seed = vars.email || vars.companyName || ''
   let spin = 0
-  return text
+  // {{#if key}}shown when key has a value{{else}}otherwise{{/if}}, nesting allowed:
+  // resolve the innermost blocks (no #if inside them) first, until none are left
+  const innermostIf = /\{\{#if\s+(\w+)\s*\}\}((?:(?!\{\{#if)[\s\S])*?)(?:\{\{else\}\}((?:(?!\{\{#if)[\s\S])*?))?\{\{\/if\}\}/g
+  let resolved = text
+  for (let i = 0; i < 10 && resolved.includes('{{#if'); i++) {
+    resolved = resolved.replace(innermostIf, (_, key: string, yes: string, no?: string) => (vars[key]?.trim() ? yes : no ?? ''))
+  }
+  return resolved
     .replace(/\{\{\s*(\w+)\s*(?:\|([^}]*))?\}\}/g, (match, key: string, fallback?: string) => {
       if (!(key in vars)) return match
       return vars[key] || fallback?.trim() || DEFAULT_FALLBACKS[key]?.(vars) || ''
@@ -132,3 +163,16 @@ export function pickDefaultTemplate<T extends PickableTemplate>(templates: T[], 
   )
 }
 
+
+export interface LeadCheck { level: 'ok' | 'thin' | 'blocked'; notes: string[] }
+
+/** How well can we personalise for this lead? Shown before bulk sends. */
+export function checkLeadData(lead: TemplateLead & { companyEmail?: string | null }, vars: Record<string, string>): LeadCheck {
+  const notes: string[] = []
+  if (!lead.companyEmail) return { level: 'blocked', notes: ['No email address'] }
+  if (!vars.companyName) notes.push('No company name: says "your practice"')
+  if (!vars.firstName && !vars.doctorName) notes.push(vars.companyName ? `No contact name: greets "${vars.companyName} team"` : 'No name or company: greets "there"')
+  if (!vars.hook || /^I was looking at/.test(vars.hook)) notes.push('No research: generic opening line')
+  if (!vars.city) notes.push('No city')
+  return { level: notes.length >= 2 ? 'thin' : 'ok', notes }
+}

@@ -4,8 +4,9 @@ import prisma from './prisma'
 import { sendGmail, getMessageIdHeader } from './gmail'
 import { buildTemplateVars, renderTemplate, pickDefaultTemplate, FOLLOW_UP_TYPES } from './template'
 import { STOP_FOLLOWUP_STATUSES } from './utils'
-import { deliverEmail, assertSendable, OutreachError, type EmailKind } from './outreach'
+import { deliverEmail, assertSendable, scheduleFollowUps, OutreachError, type EmailKind } from './outreach'
 import { hasReplied, flagDisconnected } from './replies'
+import { getSettings } from './settings'
 import type { LeadStatus } from '@/types'
 
 const SENT_STATUS: Record<string, string> = {
@@ -62,6 +63,23 @@ export async function sendScheduledEmailTask(
       lead: task.lead, sender, subject: task.subject, body: task.body, kind, userId: opts.userId, auto: opts.auto,
     })
     await prisma.followUpTask.update({ where: { id: task.id }, data: { status: 'SENT', sentAt: new Date() } })
+
+    // Bulk / queued first emails plan their follow-ups now, from the real send time
+    if (kind === 'FIRST_EMAIL') {
+      const planned = await prisma.followUpTask.count({ where: { leadId: task.leadId, status: 'PENDING', type: { in: FOLLOW_UP_TYPES } } })
+      if (!planned) {
+        const settings = await getSettings()
+        const campaign = task.lead.campaignId ? await prisma.campaign.findUnique({ where: { id: task.lead.campaignId } }) : null
+        const days = campaign ? [campaign.followUpDay1, campaign.followUpDay2, campaign.followUpDay3] : settings.followUpDays
+        await scheduleFollowUps({
+          leadId: task.leadId,
+          senderAccountId: sender.id,
+          base: new Date(),
+          plan: days.map((delayDays, i) => ({ step: i + 1, delayDays })),
+          window: settings.sendWindow,
+        })
+      }
+    }
     await refreshNextFollowUp(task.leadId)
     return { outcome: 'sent', gmailMessageId: sent.gmailMessageId }
   } catch (err) {
@@ -127,7 +145,8 @@ export async function sendFollowUpTask(
     const inReplyTo = firstMessage?.gmailMessageId
       ? await getMessageIdHeader(senderAccountId, firstMessage.gmailMessageId)
       : undefined
-    const body = renderTemplate(rawBody, buildTemplateVars(lead, sender))
+    const { demoPhone } = await getSettings()
+    const body = renderTemplate(rawBody, buildTemplateVars(lead, sender, { demoPhone }))
 
     const gmailMessage = await sendGmail({
       senderAccountId,

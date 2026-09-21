@@ -5,6 +5,7 @@ import prisma from './prisma'
 import { sendGmail } from './gmail'
 import { buildTemplateVars, renderTemplate, FOLLOW_UP_TYPES } from './template'
 import { windowSlotAfterDays, type SendWindow } from './send-window'
+import { getSettings } from './settings'
 
 export type EmailKind = 'FIRST_EMAIL' | 'OTHER'
 
@@ -95,7 +96,8 @@ export async function deliverEmail(opts: {
   auto?: boolean
 }) {
   const { lead, sender, kind } = opts
-  const vars = buildTemplateVars(lead, sender)
+  const { demoPhone } = await getSettings()
+  const vars = buildTemplateVars(lead, sender, { demoPhone })
   const subject = renderTemplate(opts.subject, vars)
   const body = renderTemplate(opts.body, vars)
 

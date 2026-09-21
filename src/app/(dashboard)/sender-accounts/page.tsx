@@ -1,4 +1,5 @@
 'use client'
+import Link from 'next/link'
 import { Suspense, useState, useEffect } from 'react'
 import useSWR from 'swr'
 import { toast } from 'sonner'
@@ -164,14 +165,19 @@ function SenderAccountsPageInner() {
                     {account.gmailStatus === 'CONNECTED' ? 'Gmail Connected' : account.gmailStatus === 'NOT_CONNECTED' ? 'Not Connected' : 'Connection Error'}
                   </span>
                 </div>
-                <Button
-                  size="sm"
-                  variant={account.gmailStatus === 'CONNECTED' ? 'outline' : 'default'}
-                  onClick={() => connectGmail(account.id)}
-                  className="text-xs h-7"
-                >
-                  {account.gmailStatus === 'CONNECTED' ? <><Wifi className="h-3 w-3" />Reconnect</> : <><WifiOff className="h-3 w-3" />Connect Gmail</>}
-                </Button>
+                <div className="flex gap-1.5">
+                  <Button size="sm" variant="outline" className="text-xs h-7" asChild>
+                    <Link href={`/inbox?inbox=${account.id}&view=all`}>Open inbox</Link>
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant={account.gmailStatus === 'CONNECTED' ? 'outline' : 'default'}
+                    onClick={() => connectGmail(account.id)}
+                    className="text-xs h-7"
+                  >
+                    {account.gmailStatus === 'CONNECTED' ? <><Wifi className="h-3 w-3" />Reconnect</> : <><WifiOff className="h-3 w-3" />Connect Gmail</>}
+                  </Button>
+                </div>
               </div>
 
               <div className="grid grid-cols-2 gap-3 text-sm">

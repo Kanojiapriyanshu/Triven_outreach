@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Clock, Shield, Repeat, Trash2 } from 'lucide-react'
+import { Clock, Shield, Repeat, Trash2, Phone } from 'lucide-react'
 import { DEFAULT_SEND_WINDOW, describeWindow, windowInZone, type SendWindow } from '@/lib/send-window'
 import { fmtDate } from '@/lib/utils'
 
@@ -18,10 +18,11 @@ interface Settings {
   dailyCapPerSender: number
   minGapMinutes: number
   maxGapMinutes: number
+  demoPhone: string
 }
 
 const DEFAULTS: Settings = {
-  sendWindow: DEFAULT_SEND_WINDOW, followUpDays: [3, 7, 14], dailyCapPerSender: 40, minGapMinutes: 8, maxGapMinutes: 15,
+  sendWindow: DEFAULT_SEND_WINDOW, followUpDays: [3, 7, 14], dailyCapPerSender: 40, minGapMinutes: 8, maxGapMinutes: 15, demoPhone: '',
 }
 
 const ZONES = [
@@ -180,6 +181,28 @@ export default function SettingsPage() {
               Each inbox sends one email, then waits a random time in this range. Inboxes take turns, so with 6 inboxes something goes out every couple of minutes.
             </p>
           </div>
+        </CardContent>
+      </Card>
+
+      {/* Demo line */}
+      <Card>
+        <CardHeader>
+          <div className="flex items-center gap-2">
+            <Phone className="h-4 w-4 text-indigo-600" />
+            <CardTitle>Demo Phone Number</CardTitle>
+          </div>
+          <CardDescription>
+            The number prospects call to test your AI receptionist. Templates use it as {'{{demoPhone}}'} (the dental Follow-up 3 is built around it).
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <Input
+            value={form.demoPhone}
+            onChange={(e) => setForm((f) => ({ ...f, demoPhone: e.target.value }))}
+            placeholder="+1 (555) 010-2030"
+            className="max-w-xs"
+          />
+          {!form.demoPhone && <p className="text-xs text-amber-600 mt-1.5">Not set: emails that use it fall back to offering to set up a demo.</p>}
         </CardContent>
       </Card>
 

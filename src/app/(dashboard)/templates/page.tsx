@@ -42,6 +42,7 @@ const SAMPLE_LEAD = { firstName: 'Sarah', companyName: 'Bright Smile Dental', ci
 export default function TemplatesPage() {
   const { data, mutate } = useSWR<Template[]>('/api/templates', fetcher)
   const { data: campaignsData, mutate: mutateCampaigns } = useSWR<Campaign[]>('/api/campaigns', fetcher)
+  const { data: settingsData } = useSWR<{ demoPhone?: string }>('/api/settings', fetcher)
   const templates = Array.isArray(data) ? data : []
   const campaigns = Array.isArray(campaignsData) ? campaignsData : []
 
@@ -149,7 +150,7 @@ export default function TemplatesPage() {
     setNiche(d.id)
   }
 
-  const sampleVars = buildTemplateVars(SAMPLE_LEAD, { displayName: 'Priyanshu' })
+  const sampleVars = buildTemplateVars(SAMPLE_LEAD, { displayName: 'Priyanshu' }, { demoPhone: settingsData?.demoPhone || '(555) 010-2030' })
   const hasSequence = STEPS.slice(0, 4).every((s) => inNiche.some((t) => t.type === s.type))
 
   return (

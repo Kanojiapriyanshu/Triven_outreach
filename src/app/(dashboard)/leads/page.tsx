@@ -20,6 +20,7 @@ import { toast } from 'sonner'
 import type { PaginatedResponse, LeadRow } from '@/types'
 import LeadFormDialog from '@/components/leads/LeadFormDialog'
 import ComposeEmailDialog, { type ComposeLead } from '@/components/email/ComposeEmailDialog'
+import BulkSendDialog from '@/components/email/BulkSendDialog'
 
 const fetcher = (url: string) => fetch(url).then((r) => r.json())
 
@@ -38,6 +39,7 @@ function LeadsPageInner() {
   const [pageSize] = useState(50)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [showForm, setShowForm] = useState(false)
+  const [showBulk, setShowBulk] = useState(false)
   // undefined = closed, null = new contact, lead = email that lead
   const [composeFor, setComposeFor] = useState<ComposeLead | null | undefined>(undefined)
 
@@ -191,6 +193,7 @@ function LeadsPageInner() {
         {selectedIds.size > 0 && (
           <div className="mt-3 flex items-center gap-3 pt-3 border-t border-slate-100">
             <span className="text-sm text-slate-600 font-medium">{selectedIds.size} selected</span>
+            <Button size="sm" onClick={() => setShowBulk(true)}><Send className="h-3.5 w-3.5" />Send email</Button>
             <Button size="sm" variant="outline" onClick={() => handleBulkAction('pause_sequence')}>Pause Sequence</Button>
             <Button size="sm" variant="outline" onClick={() => handleBulkAction('resume_sequence')}>Resume</Button>
             <Select onValueChange={(v) => handleBulkAction('change_status', v)}>
@@ -342,6 +345,14 @@ function LeadsPageInner() {
             mutate()
             if (thenEmail && lead) setComposeFor(lead)
           }}
+        />
+      )}
+
+      {showBulk && (
+        <BulkSendDialog
+          leads={leads.filter((l) => selectedIds.has(l.id))}
+          onClose={() => setShowBulk(false)}
+          onDone={() => { setShowBulk(false); setSelectedIds(new Set()); mutate() }}
         />
       )}
 

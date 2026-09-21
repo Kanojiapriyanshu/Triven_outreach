@@ -23,12 +23,12 @@ export const SEQUENCE_LIBRARY: LibrarySequence[] = [
   {
     id: 'dental',
     niche: 'Dental practices',
-    description: 'Written from each practice\'s own research: its hours, closed days, doctor, reviews. Every practice gets different wording (spintax) so no two emails are identical.',
+    description: 'Built from each practice\'s research (hours, closed days, doctor, reviews). Follow-up 3 invites them to call your demo line and test the agent as a patient. Wording varies per practice.',
     steps: [
       {
         type: 'FIRST_EMAIL',
         name: 'Dental: the gap in your hours',
-        subject: '{{{companyName}} after {{closingTime|hours}}|calls after {{closingTime|hours}}|missed calls at {{companyName}}|question about {{companyName}}}',
+        subject: '{{#if companyName}}{{{companyName}} after {{closingTime|hours}}|missed calls at {{companyName}}|{{companyName}}\'s phones after {{closingTime|5pm}}}{{else}}{{{#if closingTime}}calls after {{closingTime}}{{else}}after-hours patient calls{{/if}}|missed patient calls}{{/if}}',
         body: `{Hi|Hello} {{name}},
 
 {{hook}}
@@ -37,7 +37,7 @@ export const SEQUENCE_LIBRARY: LibrarySequence[] = [
 
 {I built|We built} Triven, an AI receptionist for dental practices. It {answers every call|picks up every call}, day or night, handles insurance and availability questions the way your team would, and books {straight into your schedule|directly into your calendar}.
 
-{Happy to set one up|I'd be glad to set one up} trained on {{companyName}}'s services and hours, so you can call it and {hear it for yourself|judge it yourself}. {No charge and no sales call|No cost to you and no call needed}.
+{Happy to set one up|I'd be glad to set one up} trained on {{#if companyName}}{{companyName}}'s{{else}}your practice's{{/if}} services and hours, so you can call it and {hear it for yourself|judge it yourself}. {No charge and no sales call|No cost to you and no call needed}.
 
 {Worth me setting it up?|Would that be useful?|Shall I put one together?}
 
@@ -49,15 +49,15 @@ export const SEQUENCE_LIBRARY: LibrarySequence[] = [
       },
       {
         type: 'FOLLOW_UP_1',
-        name: 'Dental: hear it yourself',
+        name: 'Dental: what a patient hears',
         subject: '',
         body: `{Hi|Hello} {{name}},
 
 {Quick follow-up|Just following up on my note}. {The fastest way to judge this is to hear it.|It's much easier to judge by hearing it.}
 
-I can have a {{companyName}} version ready {by tomorrow|within a day}. Call it {{testMoment}}, ask to book a cleaning or whether you take their insurance, and you'll hear exactly what a new patient would.
+Picture a new patient calling {{companyName|your practice}} {{testMoment}}. Instead of voicemail, they hear a friendly receptionist who answers their insurance question, finds a slot, books the cleaning, and texts them a confirmation. Your team sees it in the schedule the next morning.
 
-{If it doesn't sound like your practice, you've lost two minutes.|Two minutes to try, and you'll know straight away if it fits.} {Shall I build it?|Want me to set it up?}
+{I can have a version trained on {{companyName|your practice}} ready within a day.|I can set that up for {{companyName|your practice}} within a day.} {Shall I?|Want me to go ahead?}
 
 {{senderFirstName}}`,
       },
@@ -67,7 +67,7 @@ I can have a {{companyName}} version ready {by tomorrow|within a day}. Call it {
         subject: '',
         body: `{Hi|Hello} {{name}},
 
-{I ran some rough numbers for {{companyName}}.|I did some quick maths for {{companyName}}.}
+{I ran some rough numbers for {{companyName|your practice}}.|I did some quick maths for {{companyName|your practice}}.}
 
 {{gapLine}} If that means just three missed new-patient calls a month, and a new patient is often worth well over a thousand dollars over their first couple of years, that's {thousands every month|several thousand a month} going to other practices in {{city|your area}}.
 
@@ -79,17 +79,21 @@ Triven costs a small fraction of that. No new hire, no training, and nothing cha
       },
       {
         type: 'FOLLOW_UP_3',
-        name: 'Dental: the 7pm test',
+        name: 'Dental: call the demo line',
         subject: '',
         body: `{Hi|Hello} {{name}},
 
-{I haven't heard back, so I'll assume the timing isn't right and stop here.|I'll take the silence as "not right now" and close this out.}
+{{#if demoPhone}}{Last note from me, and it takes two minutes.|One last idea, and it only takes two minutes.}
 
-One thing worth doing either way: call {{companyName}} {{testMoment}} from your mobile and listen to what a new patient hears. If it's voicemail, that's the gap we close.
+Call {{demoPhone}} and pretend you're a new patient. {Ask to book a cleaning next week|Try booking a cleaning for next week}, ask whether you take their insurance, or say you've got a toothache and need to be seen soon.
 
-{If you ever want to try it, just reply and I'll have it ready within a day.|If it's ever useful, reply to this and I'll have a version ready within a day.}
+That's the AI receptionist {{companyName|your practice}} would have answering {{#if closedWhen}}{{closedWhen}}{{else}}after hours{{/if}}. If it handles your call better than voicemail does, reply "set it up" and I'll build yours within a day.{{else}}{I'll take the silence as "not right now" and close this out.|I'll assume the timing isn't right and stop here.}
 
-All the best {{practiceWish}},
+One thing worth doing either way: call {{companyName|your practice}} {{testMoment}} from your mobile and listen to what a new patient hears. If it's voicemail, that's the gap we close.
+
+If it's ever useful, reply to this and I'll have a demo ready within a day.{{/if}}
+
+{Either way, this is my last email.|Either way, I won't keep filling your inbox.} All the best {{practiceWish}},
 {{senderFirstName}}`,
       },
     ],

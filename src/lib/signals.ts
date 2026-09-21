@@ -157,10 +157,12 @@ export function signalVars(src: SignalSource, firstName: string): Record<string,
   const company = cleanCompanyName(src.companyName) || 'your practice'
   const isDental = /dent|ortho|smile/i.test(`${src.industry} ${company} ${src.whyThisLead}`)
   const patients = isDental || /clinic|medical|spa|aesthetic|chiro|physio|vet/i.test(`${src.industry} ${company}`) ? 'patients' : 'customers'
-  const team = `${company} team`
+  const hasCompany = !!cleanCompanyName(src.companyName)
+  // "Harrison Dental team"; with no company name at all, never "your practice team"
+  const team = hasCompany ? `${company} team` : 'there'
 
   // Who we're talking to: the front desk reads role inboxes, so greet the team there
-  const name = s.roleInbox ? team : (s.doctorName || firstName || team)
+  const name = s.roleInbox ? (hasCompany ? team : (s.doctorName || 'there')) : (s.doctorName || firstName || team)
 
   // 1. A genuine compliment first, when the research gives us one
   const praise = s.award
@@ -228,6 +230,8 @@ export function signalVars(src: SignalSource, firstName: string): Record<string,
     forwardLine,
     doctorName: s.doctorName,
     closedDays: s.closedDays,
+    // "on weekends" / "on Sundays" / "from Friday to Sunday"
+    closedWhen: !s.closedDays ? '' : s.closedDays.includes(' to ') ? `from ${s.closedDays}` : `on ${s.closedDays}`,
     closingTime: s.closingTime,
     testMoment: s.aClosedDay ? `on a ${s.aClosedDay} afternoon` : s.closingTime ? `at 7pm, after you've closed` : 'at 7pm tonight',
     practiceWish: s.isNewPractice ? 'with the new practice' : 'with the practice',

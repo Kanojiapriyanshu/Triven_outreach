@@ -13,19 +13,22 @@ import {
   Settings,
   Zap,
   LogOut,
+  Inbox,
 } from 'lucide-react'
+import useSWR from 'swr'
 import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
 
 const navItems = [
   { label: 'Dashboard', href: '/', icon: LayoutDashboard },
+  { label: 'Inbox', href: '/inbox', icon: Inbox },
+  { label: 'Campaigns', href: '/campaigns', icon: Megaphone },
   { label: 'Leads', href: '/leads', icon: Users },
   { label: "Today's Work", href: '/today', icon: CalendarCheck },
-  { label: 'Campaigns', href: '/campaigns', icon: Megaphone },
-  { label: 'Sender Accounts', href: '/sender-accounts', icon: Mail },
-  { label: 'Import', href: '/imports', icon: Upload },
-  { label: 'Analytics', href: '/analytics', icon: BarChart2 },
   { label: 'Templates', href: '/templates', icon: FileText },
+  { label: 'Import', href: '/imports', icon: Upload },
+  { label: 'Sender Accounts', href: '/sender-accounts', icon: Mail },
+  { label: 'Analytics', href: '/analytics', icon: BarChart2 },
   { label: 'Settings', href: '/settings', icon: Settings },
 ]
 
@@ -36,6 +39,8 @@ async function handleLogout() {
 
 export default function Sidebar() {
   const pathname = usePathname()
+  const { data: unreadData } = useSWR<{ unread: number }>('/api/inbox/unread', (u: string) => fetch(u).then((r) => r.json()), { refreshInterval: 60_000 })
+  const unread = unreadData?.unread ?? 0
 
   return (
     <aside className="fixed left-0 top-0 h-screen w-60 bg-slate-900 flex flex-col z-40">
@@ -66,7 +71,10 @@ export default function Sidebar() {
               )}
             >
               <Icon className="h-4 w-4 shrink-0" />
-              {label}
+              <span className="flex-1">{label}</span>
+              {href === '/inbox' && unread > 0 && (
+                <span className="rounded-full bg-indigo-500 px-1.5 text-[10px] font-semibold leading-4 text-white">{unread > 99 ? '99+' : unread}</span>
+              )}
             </Link>
           )
         })}

@@ -10,6 +10,8 @@ export interface OutreachSettings {
   /** Random wait between two emails from the same inbox, in minutes (Instantly-style) */
   minGapMinutes: number
   maxGapMinutes: number
+  /** Demo line prospects can call to test the AI receptionist, used as {{demoPhone}} */
+  demoPhone: string
 }
 
 export const DEFAULT_SETTINGS: OutreachSettings = {
@@ -18,6 +20,7 @@ export const DEFAULT_SETTINGS: OutreachSettings = {
   dailyCapPerSender: 40,
   minGapMinutes: 8,
   maxGapMinutes: 15,
+  demoPhone: '',
 }
 
 const KEY = 'outreach'

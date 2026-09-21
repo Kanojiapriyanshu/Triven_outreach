@@ -100,7 +100,7 @@ export default function ComposeEmailDialog({
   const { data: sendersData }   = useSWR<Sender[]>('/api/sender-accounts', fetcher)
   const { data: templatesData } = useSWR<Template[]>('/api/templates', fetcher)
   const { data: campaignsData } = useSWR<Campaign[]>('/api/campaigns', fetcher)
-  const { data: settingsData }  = useSWR<{ sendWindow: SendWindow; followUpDays: number[] }>('/api/settings', fetcher)
+  const { data: settingsData }  = useSWR<{ sendWindow: SendWindow; followUpDays: number[]; demoPhone?: string }>('/api/settings', fetcher)
   const { data: allowance }     = useSWR<Record<string, { left: number; limit: number; warmingUp: boolean }>>('/api/sender-accounts/allowance', fetcher)
   const sendWindow = settingsData?.sendWindow ?? DEFAULT_SEND_WINDOW
   const defaultDelays = settingsData?.followUpDays ?? DEFAULT_DELAYS
@@ -147,7 +147,7 @@ export default function ComposeEmailDialog({
   const recipient = isNewLead
     ? { firstName: toFirstName, companyName: toCompany || guessCompanyFromEmail(toEmail), companyEmail: toEmail }
     : lead
-  const vars = buildTemplateVars(recipient, sender)
+  const vars = buildTemplateVars(recipient, sender, { demoPhone: settingsData?.demoPhone })
 
   function applyTemplate(t: Template, announce = true) {
     setTemplateId(t.id)
