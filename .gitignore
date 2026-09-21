@@ -28,7 +28,7 @@ src/triven_outreach_engine.egg-info/
 config/
 examples/
 locations/
-templates/
+/templates/
 tests/
 Makefile
 pyproject.toml
