@@ -60,6 +60,28 @@ function InboxInner() {
   const { data, mutate: mutateList } = useSWR<{ conversations: Conversation[]; inboxes: InboxRow[] }>(listKey, fetcher, { refreshInterval: 60_000 })
   const { data: thread, mutate: mutateThread } = useSWR<Thread>(selected ? `/api/inbox/${selected}` : null, fetcher)
 
+  // Pull new replies from Gmail when the Inbox opens and every 2 minutes while it stays open,
+  // so replies show up right away instead of waiting for the background worker
+  const [syncing, setSyncing] = useState(false)
+  const { data: syncInfo, mutate: mutateSync } = useSWR<{ lastSyncAt: string | null }>('/api/inbox/sync', fetcher)
+  async function syncNow(manual = false) {
+    setSyncing(true)
+    try {
+      const res = await fetch('/api/inbox/sync', { method: 'POST' })
+      const d = await res.json().catch(() => ({}))
+      if (manual && res.ok) {
+        const found = (d.replies ?? 0) + (d.synced ?? 0)
+        toast.success(d.skipped ? 'Just synced a moment ago' : found ? `${found} new message${found > 1 ? 's' : ''}` : 'Up to date')
+      }
+      mutateSync(); mutateList(); if (selected) mutateThread()
+    } finally { setSyncing(false) }
+  }
+  useEffect(() => {
+    syncNow()
+    const t = setInterval(() => syncNow(), 120_000)
+    return () => clearInterval(t)
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
   const conversations = Array.isArray(data?.conversations) ? data.conversations : []
   const inboxes = Array.isArray(data?.inboxes) ? data.inboxes : []
   const totalUnread = inboxes.reduce((n, i) => n + i.unread, 0)
@@ -78,8 +100,15 @@ function InboxInner() {
       {/* Inboxes */}
       <aside className="hidden md:flex w-56 shrink-0 flex-col border-r border-slate-200 bg-slate-50">
         <div className="px-4 py-3 border-b border-slate-200">
-          <p className="text-sm font-semibold text-slate-800">Inboxes</p>
-          <p className="text-xs text-slate-400">Synced from Gmail every 5 min</p>
+          <div className="flex items-center justify-between">
+            <p className="text-sm font-semibold text-slate-800">Inboxes</p>
+            <button onClick={() => syncNow(true)} disabled={syncing} className="text-xs text-indigo-600 hover:underline disabled:text-slate-400">
+              {syncing ? 'Syncing…' : 'Sync now'}
+            </button>
+          </div>
+          <p className="text-xs text-slate-400">
+            {syncing ? 'Checking Gmail…' : syncInfo?.lastSyncAt ? `Gmail checked ${fmtRelative(syncInfo.lastSyncAt)}` : 'Not synced yet'}
+          </p>
         </div>
         <nav className="flex-1 overflow-y-auto p-2 space-y-0.5">
           <InboxButton active={inbox === 'all'} label="All inboxes" sub={`${inboxes.length} connected`} count={totalUnread} onClick={() => go({ inbox: null, lead: null })} />

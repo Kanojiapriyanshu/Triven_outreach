@@ -36,7 +36,11 @@ function findPart(part: gmail_v1.Schema$MessagePart | undefined, mime: string): 
 
 /** Keep only what they wrote: drop the quoted history and signatures separators */
 export function stripQuoted(text: string) {
-  const lines = text.replace(/\r\n/g, '\n').split('\n')
+  let clean = text.replace(/\r\n/g, '\n')
+  // "On Mon, 21 Sept 2026, 10:11 pm Kate <kate@x.com>\nwrote:": phone apps wrap this line
+  const header = clean.match(/(^|\n)[ \t]*On [^\n]{5,250}?(?:\n[^\n]{0,150}?)?(wrote|schrieb|a écrit|escribió):[ \t]*(\n|$)/)
+  if (header?.index !== undefined) clean = clean.slice(0, header.index)
+  const lines = clean.split('\n')
   const out: string[] = []
   for (const line of lines) {
     if (/^On .{5,200}(wrote|schrieb|a écrit|escribió):?\s*$/i.test(line.trim())) break
@@ -189,6 +193,9 @@ export async function hasReplied(lead: Lead, senderAccountId: string, threadId: 
  * lead addresses (catches replies started as a brand-new email).
  */
 export async function checkAllReplies(deadline: number) {
+  // Remember when Gmail was last checked (shown in the Inbox, throttles manual syncs)
+  const at = new Date().toISOString()
+  await prisma.setting.upsert({ where: { key: 'lastInboxSync' }, create: { key: 'lastInboxSync', value: at }, update: { value: at } })
   const result = { accounts: 0, threadsChecked: 0, replies: 0, bounces: 0, synced: 0, errors: [] as string[] }
   const senders = await prisma.senderAccount.findMany({ where: { isActive: true, refreshToken: { not: null } } })
 
