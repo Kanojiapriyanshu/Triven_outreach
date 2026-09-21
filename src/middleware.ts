@@ -4,7 +4,8 @@ import { sessionOptions } from './lib/auth'
 import type { SessionData } from './types'
 
 // Routes that don't require authentication
-const PUBLIC_PATHS = ['/login', '/api/auth/login', '/api/gmail/callback']
+// (/api/worker authenticates itself via the x-worker-secret header)
+const PUBLIC_PATHS = ['/login', '/api/auth/login', '/api/gmail/callback', '/api/worker']
 
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl
