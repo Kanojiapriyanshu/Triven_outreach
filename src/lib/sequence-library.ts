@@ -85,7 +85,7 @@ Triven costs a small fraction of that. No new hire, no training, and nothing cha
 
 {{#if demoPhone}}{Last note from me, and it takes two minutes.|One last idea, and it only takes two minutes.}
 
-Call {{demoPhone}} and pretend you're a new patient. {Ask to book a cleaning next week|Try booking a cleaning for next week}, ask whether you take their insurance, or say you've got a toothache and need to be seen soon.
+Call {{demoPhone}} and pretend you're a new patient. {Ask to book a cleaning next week|Try booking a cleaning for next week}, ask if it takes your insurance, or say you've got a toothache and need to be seen soon.
 
 That's the AI receptionist {{companyName|your practice}} would have answering {{#if closedWhen}}{{closedWhen}}{{else}}after hours{{/if}}. If it handles your call better than voicemail does, reply "set it up" and I'll build yours within a day.{{else}}{I'll take the silence as "not right now" and close this out.|I'll assume the timing isn't right and stop here.}
 
