@@ -199,8 +199,9 @@ function SenderAccountsPageInner() {
           <DialogHeader><DialogTitle>Add Sender Account</DialogTitle></DialogHeader>
           <div className="space-y-4">
             <div>
-              <Label>Display Name *</Label>
-              <Input value={form.displayName} onChange={(e) => setF('displayName', e.target.value)} placeholder="Priyanshu – Account 1" className="mt-1" />
+              <Label>Sender name *</Label>
+              <Input value={form.displayName} onChange={(e) => setF('displayName', e.target.value)} placeholder="Kate Morgan" className="mt-1" />
+              <p className="text-xs text-slate-400 mt-1">A real person&apos;s name. Prospects see it in the From line and sign-off, and spam filters flag names like &ldquo;Account 1&rdquo;.</p>
             </div>
             <div>
               <Label>Gmail Address *</Label>
@@ -237,8 +238,9 @@ function SenderAccountsPageInner() {
           <DialogHeader><DialogTitle>Edit Sender Account</DialogTitle></DialogHeader>
           <div className="space-y-4">
             <div>
-              <Label>Display Name</Label>
-              <Input value={form.displayName} onChange={(e) => setF('displayName', e.target.value)} className="mt-1" />
+              <Label>Sender name</Label>
+              <Input value={form.displayName} onChange={(e) => setF('displayName', e.target.value)} placeholder="Kate Morgan" className="mt-1" />
+              <p className="text-xs text-slate-400 mt-1">Shown as &ldquo;Kate Morgan &lt;kate@…&gt;&rdquo; and used to sign emails.</p>
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div>
@@ -252,7 +254,8 @@ function SenderAccountsPageInner() {
             </div>
             <div>
               <Label>Email Signature</Label>
-              <Textarea value={form.signature} onChange={(e) => setF('signature', e.target.value)} className="mt-1" rows={4} />
+              <Textarea value={form.signature} onChange={(e) => setF('signature', e.target.value)} placeholder={'Kate Morgan\nGrowth, Triven\n123 Market St, San Francisco, CA 94105'} className="mt-1" rows={4} />
+              <p className="text-xs text-slate-400 mt-1">Plain text, no links or images. Include a business postal address (US law requires one in cold email). Leave it empty if your templates already sign off.</p>
             </div>
           </div>
           <DialogFooter>

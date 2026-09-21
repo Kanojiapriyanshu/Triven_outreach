@@ -2,6 +2,7 @@
 // Uses googleapis library – tokens stored in DB, never in client
 
 import { google } from 'googleapis'
+import { randomBytes } from 'crypto'
 import prisma from './prisma'
 
 export function getOAuthClient() {
@@ -78,38 +79,90 @@ function encodeHeader(value: string) {
     : `=?UTF-8?B?${Buffer.from(value, 'utf-8').toString('base64')}?=`
 }
 
-/** Encode a raw MIME message for the Gmail API */
-export function encodeMimeMessage(opts: {
-  from: string
-  to: string
-  subject: string
-  body: string
-  inReplyTo?: string
-}) {
-  const headers = [
-    `From: ${opts.from}`,
-    `To: ${opts.to}`,
-    `Subject: ${encodeHeader(opts.subject)}`,
-    'MIME-Version: 1.0',
-    'Content-Type: text/html; charset=utf-8',
-    'Content-Transfer-Encoding: base64',
-  ]
-  // Threading headers make the follow-up show as a reply in the recipient's inbox too
-  if (opts.inReplyTo) headers.push(`In-Reply-To: ${opts.inReplyTo}`, `References: ${opts.inReplyTo}`)
-
-  const encodedBody = Buffer.from(opts.body, 'utf-8').toString('base64').replace(/(.{76})/g, '$1\r\n')
-  const mime = [...headers, '', encodedBody].join('\r\n')
-
-  return Buffer.from(mime).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+/** "Kate Morgan" <kate@x.com>: quote names with special characters, encode non-ASCII ones */
+function formatAddress(name: string, email: string) {
+  const clean = name.replace(/["\r\n<>]/g, '').trim()
+  if (!clean) return email
+  if (!/^[ -~]*$/.test(clean)) return `${encodeHeader(clean)} <${email}>`
+  return /[(),.:;@[\]\\]/.test(clean) ? `"${clean}" <${email}>` : `${clean} <${email}>`
 }
 
-/** Plain text → minimal HTML (escapes markup, keeps line breaks) */
+/**
+ * Quoted-printable (RFC 2045). Gmail and Outlook send text this way; base64-encoded
+ * text parts are a known spam-filter signal (e.g. SpamAssassin MIME_BASE64_TEXT).
+ */
+export function quotedPrintable(text: string) {
+  return text.replace(/\r\n|\r/g, '\n').split('\n').map((line) => {
+    const bytes = Buffer.from(line, 'utf-8')
+    let out = ''
+    let len = 0
+    const push = (chunk: string) => {
+      if (len + chunk.length > 75) { out += '=\r\n'; len = 0 }
+      out += chunk
+      len += chunk.length
+    }
+    bytes.forEach((b, i) => {
+      const last = i === bytes.length - 1
+      if ((b >= 33 && b <= 126 && b !== 61) || ((b === 32 || b === 9) && !last)) push(String.fromCharCode(b))
+      else push(`=${b.toString(16).toUpperCase().padStart(2, '0')}`)
+    })
+    return out
+  }).join('\r\n')
+}
+
+/** Plain text → the same minimal HTML Gmail's own composer produces */
 function textToHtml(text: string) {
-  return text
+  const escaped = text
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/\r?\n/g, '<br>')
+  return `<div dir="ltr">${escaped}</div>`
+}
+
+/**
+ * Build a raw message for the Gmail API, shaped like mail written in Gmail itself:
+ * multipart/alternative with a plain-text part and a simple HTML part, quoted-printable.
+ * Gmail adds Date and Message-ID on send.
+ */
+export function encodeMimeMessage(opts: {
+  from: string
+  to: string
+  subject: string
+  text: string
+  inReplyTo?: string
+}) {
+  const boundary = `000000000000${randomBytes(8).toString('hex')}`
+  const headers = ['MIME-Version: 1.0']
+  // Threading headers make the follow-up show as a reply in the recipient's inbox too
+  if (opts.inReplyTo) headers.push(`References: ${opts.inReplyTo}`, `In-Reply-To: ${opts.inReplyTo}`)
+  headers.push(
+    `Subject: ${encodeHeader(opts.subject)}`,
+    `From: ${opts.from}`,
+    `To: ${opts.to}`,
+    `Content-Type: multipart/alternative; boundary="${boundary}"`,
+  )
+
+  const mime = [
+    ...headers,
+    '',
+    `--${boundary}`,
+    'Content-Type: text/plain; charset="UTF-8"',
+    'Content-Transfer-Encoding: quoted-printable',
+    '',
+    quotedPrintable(opts.text),
+    '',
+    `--${boundary}`,
+    'Content-Type: text/html; charset="UTF-8"',
+    'Content-Transfer-Encoding: quoted-printable',
+    '',
+    quotedPrintable(textToHtml(opts.text)),
+    '',
+    `--${boundary}--`,
+    '',
+  ].join('\r\n')
+
+  return Buffer.from(mime).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
 }
 
 /** Send an email via the Gmail API. Pass threadId + inReplyTo to reply in an existing thread. */
@@ -132,10 +185,10 @@ export async function sendGmail(opts: {
     : opts.body
 
   const raw = encodeMimeMessage({
-    from: `${encodeHeader(account.displayName)} <${account.email}>`,
+    from: formatAddress(account.displayName, account.email),
     to: opts.to,
     subject: opts.subject,
-    body: textToHtml(bodyWithSig),
+    text: bodyWithSig,
     inReplyTo: opts.inReplyTo,
   })
 

@@ -74,14 +74,31 @@ export function buildTemplateVars(lead: TemplateLead, sender?: TemplateSender | 
  * Lines left empty by a missing optional value (e.g. {{personalNote}}) are collapsed.
  */
 export function renderTemplate(text: string, vars: Record<string, string>) {
+  const seed = vars.email || vars.companyName || ''
+  let spin = 0
   return text
     .replace(/\{\{\s*(\w+)\s*(?:\|([^}]*))?\}\}/g, (match, key: string, fallback?: string) => {
       if (!(key in vars)) return match
       return vars[key] || fallback?.trim() || DEFAULT_FALLBACKS[key]?.(vars) || ''
     })
+    // Spintax {a|b|c}: each lead gets its own (stable) wording, so no two emails are identical
+    .replace(/\{([^{}]*\|[^{}]*)\}/g, (_, options: string) => {
+      const choices = options.split('|')
+      return choices[hash(`${seed}#${spin++}#${options}`) % choices.length]
+    })
     .replace(/[ \t]+\n/g, '\n')
     .replace(/\n{3,}/g, '\n\n')
     .trim()
+}
+
+/** FNV-1a: small, stable string hash for seeding spintax */
+function hash(s: string) {
+  let h = 0x811c9dc5
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i)
+    h = Math.imul(h, 0x01000193)
+  }
+  return h >>> 0
 }
 
 /** Best-effort company name from an email domain: "jane@brightsmile-dental.com" → "Brightsmile Dental" */

@@ -4,7 +4,7 @@ import { requireAuth } from '@/lib/auth'
 import prisma from '@/lib/prisma'
 import { guessCompanyFromEmail } from '@/lib/template'
 import { refreshNextFollowUp } from '@/lib/followups'
-import { deliverEmail, assertSendable, scheduleFollowUps, OutreachError, type FollowUpPlanStep } from '@/lib/outreach'
+import { deliverEmail, assertSendable, scheduleFollowUps, dailyAllowance, OutreachError, type FollowUpPlanStep } from '@/lib/outreach'
 import { getSettings } from '@/lib/settings'
 import { nextWindowSlot } from '@/lib/send-window'
 
@@ -54,6 +54,9 @@ export async function POST(req: NextRequest) {
       lead = await prisma.lead.findFirst({ where: { companyEmail: email } })
       if (!lead) {
         const { firstName, lastName, campaignId } = input.newLead
+        if (!input.newLead.companyName?.trim() && !guessCompanyFromEmail(email)) {
+          return NextResponse.json({ error: 'Add the company name. It is used in the email, and a Gmail address does not tell us.' }, { status: 400 })
+        }
         lead = await prisma.lead.create({
           data: {
             companyEmail: email,
@@ -130,6 +133,15 @@ export async function POST(req: NextRequest) {
     }
 
     // ── Send now ───────────────────────────────────────────────────────────────
+    // Cold first emails count against the account's warm-up allowance; replies and one-offs don't
+    if (kind === 'FIRST_EMAIL') {
+      const allowance = await dailyAllowance(sender, settings.dailyCapPerSender)
+      if (allowance.left <= 0) {
+        return NextResponse.json({
+          error: `${sender.email} has sent ${allowance.used}/${allowance.limit} today${allowance.warmingUp ? ` (warm-up day ${allowance.warmupDay})` : ''}. Use Schedule → next send window, or send from another account.`,
+        }, { status: 429 })
+      }
+    }
     const sent = await deliverEmail({ lead, sender, subject: input.subject, body: input.body, kind, userId: session.userId })
 
     let scheduled = 0

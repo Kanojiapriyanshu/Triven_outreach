@@ -1,5 +1,6 @@
 // Core outreach actions shared by the API routes and the background worker.
 import type { Lead, SenderAccount } from '@prisma/client'
+import { promises as dns } from 'dns'
 import prisma from './prisma'
 import { sendGmail } from './gmail'
 import { buildTemplateVars, renderTemplate, FOLLOW_UP_TYPES } from './template'
@@ -32,7 +33,52 @@ export async function assertSendable(lead: Lead, sender: SenderAccount | null): 
     where: { OR: [{ email }, { domain: email.split('@')[1] }] },
   })
   if (suppressed) throw new OutreachError('This email is on the do-not-contact list')
+
+  // Bounces hurt the sending account's reputation more than anything: never email a dead domain
+  if (!(await domainAcceptsMail(email.split('@')[1]))) {
+    await prisma.lead.update({ where: { id: lead.id }, data: { status: 'INVALID_EMAIL', nextFollowUpAt: null } })
+    await prisma.followUpTask.updateMany({ where: { leadId: lead.id, status: 'PENDING' }, data: { status: 'CANCELLED' } })
+    throw new OutreachError(`${email.split('@')[1]} can't receive email (no mail server). Lead marked invalid.`)
+  }
   return sender
+}
+
+const mxCache = new Map<string, boolean>()
+
+/** Does this domain have a mail server? DNS errors other than "doesn't exist" count as yes. */
+export async function domainAcceptsMail(domain: string) {
+  if (mxCache.has(domain)) return mxCache.get(domain)!
+  let ok = true
+  try {
+    const mx = await dns.resolveMx(domain)
+    ok = mx.some((r) => r.exchange && r.exchange !== '.')
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code
+    if (code === 'ENOTFOUND' || code === 'ENODATA') {
+      // No MX: RFC 5321 falls back to an A record
+      ok = await dns.resolve4(domain).then((a) => a.length > 0).catch(() => false)
+    }
+  }
+  mxCache.set(domain, ok)
+  return ok
+}
+
+/**
+ * How many emails this account may send today. New accounts ramp up slowly
+ * (5 → 10 → 20 → 30 a day by week), because a fresh Gmail suddenly sending cold
+ * email is the #1 reason mail lands in spam.
+ */
+export async function dailyAllowance(sender: { email: string; dailyEmailTarget: number }, globalCap: number) {
+  const first = await prisma.emailMessage.findFirst({
+    where: { direction: 'OUTBOUND', fromAddress: sender.email },
+    orderBy: { sentAt: 'asc' },
+    select: { sentAt: true },
+  })
+  const days = first?.sentAt ? Math.floor((Date.now() - first.sentAt.getTime()) / 86_400_000) : 0
+  const ramp = days < 7 ? 5 : days < 14 ? 10 : days < 21 ? 20 : days < 28 ? 30 : Infinity
+  const limit = Math.min(ramp, globalCap, sender.dailyEmailTarget || globalCap)
+  const used = await sentInLast24h(sender.email)
+  return { limit, used, left: Math.max(0, limit - used), warmingUp: ramp !== Infinity, warmupDay: days + 1 }
 }
 
 /** Render + send a first email or one-off email, and record it everywhere. */

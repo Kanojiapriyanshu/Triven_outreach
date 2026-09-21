@@ -101,6 +101,7 @@ export default function ComposeEmailDialog({
   const { data: templatesData } = useSWR<Template[]>('/api/templates', fetcher)
   const { data: campaignsData } = useSWR<Campaign[]>('/api/campaigns', fetcher)
   const { data: settingsData }  = useSWR<{ sendWindow: SendWindow; followUpDays: number[] }>('/api/settings', fetcher)
+  const { data: allowance }     = useSWR<Record<string, { left: number; limit: number; warmingUp: boolean }>>('/api/sender-accounts/allowance', fetcher)
   const sendWindow = settingsData?.sendWindow ?? DEFAULT_SEND_WINDOW
   const defaultDelays = settingsData?.followUpDays ?? DEFAULT_DELAYS
   const senders   = Array.isArray(sendersData) ? sendersData : []
@@ -111,12 +112,15 @@ export default function ComposeEmailDialog({
   const sender = senders.find(s => s.id === from)
   const mainTemplates = templates.filter(t => t.type === templateType || (templateType === 'OTHER' && t.type === 'FIRST_EMAIL'))
 
-  // Pick a default sender: the lead's own, else the first connected account
+  // Pick a default sender: the lead's own (keeps the conversation in one inbox), else the
+  // connected account with the most sends left today, spreading volume across accounts
   useEffect(() => {
     if (from || !connectedSenders.length) return
     const own = connectedSenders.find(s => s.id === lead?.senderAccountId)
-    setFrom((own || connectedSenders[0]).id)
-  }, [connectedSenders, from, lead?.senderAccountId])
+    if (!own && !allowance) return // wait for today's allowances before choosing
+    const freshest = [...connectedSenders].sort((a, b) => (allowance?.[b.id]?.left ?? 0) - (allowance?.[a.id]?.left ?? 0))[0]
+    setFrom((own || freshest).id)
+  }, [connectedSenders, from, lead?.senderAccountId, allowance])
 
   // Follow-up timing follows the campaign schedule when there is one
   useEffect(() => {
@@ -178,6 +182,9 @@ export default function ComposeEmailDialog({
   /** schedule: undefined = send now, 'window' = next send window, ISO string = exact time */
   async function handleSend(schedule?: string) {
     if (isNewLead && !/^\S+@\S+\.\S+$/.test(toEmail.trim())) return toast.error('Enter a valid email address')
+    if (isNewLead && !toCompany.trim() && !guessCompanyFromEmail(toEmail)) {
+      return toast.error('Add the company name. It goes into the email.')
+    }
     if (!from) return toast.error('Select a sender account')
     if (!isFollowUp && !subject.trim()) return toast.error('Subject is required')
     if (!body.trim()) return toast.error('Write the email or pick a template')
@@ -317,9 +324,15 @@ export default function ComposeEmailDialog({
                 <Select value={from} onValueChange={setFrom}>
                   <SelectTrigger className="h-9 text-sm"><SelectValue placeholder="Select sender…" /></SelectTrigger>
                   <SelectContent>
-                    {connectedSenders.map(s => (
-                      <SelectItem key={s.id} value={s.id}>{s.displayName} &lt;{s.email}&gt;</SelectItem>
-                    ))}
+                    {connectedSenders.map(s => {
+                      const a = allowance?.[s.id]
+                      return (
+                        <SelectItem key={s.id} value={s.id}>
+                          {s.displayName} &lt;{s.email}&gt;
+                          {a && <span className={`ml-1 text-xs ${a.left ? 'text-slate-400' : 'text-red-500'}`}>· {a.left}/{a.limit} left{a.warmingUp ? ' (warming up)' : ''}</span>}
+                        </SelectItem>
+                      )
+                    })}
                   </SelectContent>
                 </Select>
               )}

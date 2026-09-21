@@ -27,9 +27,15 @@ export async function GET(req: NextRequest) {
     const oauth2Service = google.oauth2({ version: 'v2', auth: oauth2 })
     const { data: userInfo } = await oauth2Service.userinfo.get()
 
+    // Prospects see the display name in the From line and sign-off, so never keep a
+    // placeholder like "Sender Account 1": use the Google profile name instead
+    const current = await prisma.senderAccount.findUnique({ where: { id: senderAccountId }, select: { displayName: true } })
+    const placeholder = !current?.displayName || /^sender account/i.test(current.displayName) || current.displayName.includes('@')
+
     await prisma.senderAccount.update({
       where: { id: senderAccountId },
       data: {
+        ...(placeholder && userInfo.name ? { displayName: userInfo.name } : {}),
         accessToken: tokens.access_token,
         refreshToken: tokens.refresh_token,
         tokenExpiresAt: tokens.expiry_date ? new Date(tokens.expiry_date) : null,

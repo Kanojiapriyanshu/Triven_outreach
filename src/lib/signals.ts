@@ -100,6 +100,8 @@ function findClosingTime(text: string) {
 
 /** "Ingalls Family Dental (Dr. Preet Kulaar)" → "Ingalls Family Dental" */
 export function cleanCompanyName(name?: string | null) {
+  // A free-mail domain ("gmail.com") is never a company name
+  if (/^(gmail|googlemail|yahoo|outlook|hotmail|icloud|aol|proton|protonmail|live|msn|me)\.[a-z.]+$/i.test((name || '').trim())) return ''
   return (name || '')
     .replace(/\s*\([^)]*\)\s*/g, ' ')
     .replace(/,?\s+(inc|llc|ltd|limited|pllc|pc|p\.c|corp|co)\.?$/i, '')
