@@ -7,7 +7,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server'
 import prisma from '@/lib/prisma'
-import { sendGmail } from '@/lib/gmail'
+import { sendFollowUpTask } from '@/lib/followups'
 
 function isAuthorized(req: NextRequest) {
   const secret = req.headers.get('x-worker-secret')
@@ -25,83 +25,23 @@ export async function POST(req: NextRequest) {
   if (action === 'process_followups') {
     const now = new Date()
 
-    // Find all PENDING tasks due now or in the past
+    // All PENDING tasks due now or in the past, oldest first
     const tasks = await prisma.followUpTask.findMany({
-      where: {
-        status: 'PENDING',
-        scheduledAt: { lte: now },
-      },
-      include: {
-        lead: true,
-      },
-      take: 50, // process in batches
+      where: { status: 'PENDING', scheduledAt: { lte: now } },
+      select: { id: true },
+      orderBy: { scheduledAt: 'asc' },
+      take: 25, // stay well inside the 60s function limit
     })
 
     const results = { sent: 0, skipped: 0, failed: 0, errors: [] as string[] }
 
     for (const task of tasks) {
-      // Skip if lead is in a terminal status or no email
-      const terminalStatuses = ['REPLIED', 'INTERESTED', 'WON', 'LOST', 'NOT_INTERESTED', 'UNSUBSCRIBED', 'DO_NOT_CONTACT', 'INVALID_EMAIL']
-      if (terminalStatuses.includes(task.lead.status)) {
-        await prisma.followUpTask.update({ where: { id: task.id }, data: { status: 'SKIPPED' } })
-        results.skipped++
-        continue
-      }
-
-      if (!task.lead.companyEmail) {
-        await prisma.followUpTask.update({ where: { id: task.id }, data: { status: 'SKIPPED' } })
-        results.skipped++
-        continue
-      }
-
-      const senderAccountId = task.senderAccountId || task.lead.senderAccountId
-      if (!senderAccountId) { results.skipped++; continue }
-
-      try {
-        const gmailMessage = await sendGmail({
-          senderAccountId,
-          to: task.lead.companyEmail,
-          subject: task.subject ?? 'Following up',
-          body:    task.body    ?? '',
-        })
-
-        await prisma.followUpTask.update({
-          where: { id: task.id },
-          data: { status: 'SENT', sentAt: new Date() },
-        })
-
-        const statusMap: Record<string, string> = {
-          FOLLOW_UP_1: 'FOLLOW_UP_1_SENT',
-          FOLLOW_UP_2: 'FOLLOW_UP_2_SENT',
-          FOLLOW_UP_3: 'FOLLOW_UP_3_SENT',
-        }
-        const sentAtField = {
-          FOLLOW_UP_1: { followUp1SentAt: new Date() },
-          FOLLOW_UP_2: { followUp2SentAt: new Date() },
-          FOLLOW_UP_3: { followUp3SentAt: new Date() },
-        }[task.type] || {}
-
-        await prisma.lead.update({
-          where: { id: task.leadId },
-          data: { status: statusMap[task.type] || undefined, lastContactedAt: new Date(), ...sentAtField },
-        })
-
-        await prisma.activity.create({
-          data: {
-            leadId: task.leadId,
-            senderAccountId,
-            type: 'FOLLOW_UP_SENT',
-            title: `${task.type.replace(/_/g, ' ')} sent (auto)`,
-            body: task.subject,
-            metadata: { gmailMessageId: gmailMessage.id, taskId: task.id, auto: true },
-          },
-        })
-
-        results.sent++
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err)
-        results.errors.push(`Task ${task.id}: ${msg}`)
+      const result = await sendFollowUpTask(task.id, { auto: true })
+      if (result.outcome === 'sent') results.sent++
+      else if (result.outcome === 'skipped') results.skipped++
+      else {
         results.failed++
+        results.errors.push(`Task ${task.id}: ${result.reason}`)
       }
     }
 

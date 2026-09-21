@@ -71,32 +71,48 @@ export async function getGmailClientForAccount(senderAccountId: string) {
   return google.gmail({ version: 'v1', auth: oauth2 })
 }
 
+/** RFC 2047-encode a header value when it contains non-ASCII characters */
+function encodeHeader(value: string) {
+  return /^[ -~]*$/.test(value)
+    ? value
+    : `=?UTF-8?B?${Buffer.from(value, 'utf-8').toString('base64')}?=`
+}
+
 /** Encode a raw MIME message for the Gmail API */
 export function encodeMimeMessage(opts: {
   from: string
   to: string
   subject: string
   body: string
-  threadId?: string
   inReplyTo?: string
 }) {
-  const mime = [
+  const headers = [
     `From: ${opts.from}`,
     `To: ${opts.to}`,
-    `Subject: ${opts.subject}`,
+    `Subject: ${encodeHeader(opts.subject)}`,
     'MIME-Version: 1.0',
     'Content-Type: text/html; charset=utf-8',
-    opts.inReplyTo ? `In-Reply-To: ${opts.inReplyTo}` : '',
-    '',
-    opts.body,
+    'Content-Transfer-Encoding: base64',
   ]
-    .filter((l) => l !== null)
-    .join('\r\n')
+  // Threading headers make the follow-up show as a reply in the recipient's inbox too
+  if (opts.inReplyTo) headers.push(`In-Reply-To: ${opts.inReplyTo}`, `References: ${opts.inReplyTo}`)
+
+  const encodedBody = Buffer.from(opts.body, 'utf-8').toString('base64').replace(/(.{76})/g, '$1\r\n')
+  const mime = [...headers, '', encodedBody].join('\r\n')
 
   return Buffer.from(mime).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
 }
 
-/** Send an email via the Gmail API */
+/** Plain text → minimal HTML (escapes markup, keeps line breaks) */
+function textToHtml(text: string) {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/\r?\n/g, '<br>')
+}
+
+/** Send an email via the Gmail API. Pass threadId + inReplyTo to reply in an existing thread. */
 export async function sendGmail(opts: {
   senderAccountId: string
   to: string
@@ -116,11 +132,10 @@ export async function sendGmail(opts: {
     : opts.body
 
   const raw = encodeMimeMessage({
-    from: `${account.displayName} <${account.email}>`,
+    from: `${encodeHeader(account.displayName)} <${account.email}>`,
     to: opts.to,
     subject: opts.subject,
-    body: bodyWithSig.replace(/\n/g, '<br>'),
-    threadId: opts.threadId,
+    body: textToHtml(bodyWithSig),
     inReplyTo: opts.inReplyTo,
   })
 
@@ -130,4 +145,20 @@ export async function sendGmail(opts: {
   })
 
   return response.data
+}
+
+/** RFC Message-ID header of a sent message (needed for In-Reply-To when threading) */
+export async function getMessageIdHeader(senderAccountId: string, gmailMessageId: string) {
+  try {
+    const gmail = await getGmailClientForAccount(senderAccountId)
+    const msg = await gmail.users.messages.get({
+      userId: 'me',
+      id: gmailMessageId,
+      format: 'metadata',
+      metadataHeaders: ['Message-ID'],
+    })
+    return msg.data.payload?.headers?.find(h => h.name?.toLowerCase() === 'message-id')?.value || undefined
+  } catch {
+    return undefined
+  }
 }

@@ -5,7 +5,7 @@ import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
 import {
   Plus, Filter, Download, Upload, Search, ChevronLeft, ChevronRight,
-  MoreHorizontal, Pencil, Trash2, ExternalLink,
+  Trash2, ExternalLink, Send,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -19,6 +19,7 @@ import { fmtDate, fmtRelative, getDisplayName, isOverdue } from '@/lib/utils'
 import { toast } from 'sonner'
 import type { PaginatedResponse, LeadRow } from '@/types'
 import LeadFormDialog from '@/components/leads/LeadFormDialog'
+import ComposeEmailDialog, { type ComposeLead } from '@/components/email/ComposeEmailDialog'
 
 const fetcher = (url: string) => fetch(url).then((r) => r.json())
 
@@ -37,6 +38,8 @@ function LeadsPageInner() {
   const [pageSize] = useState(50)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [showForm, setShowForm] = useState(false)
+  // undefined = closed, null = new contact, lead = email that lead
+  const [composeFor, setComposeFor] = useState<ComposeLead | null | undefined>(undefined)
 
   const q = searchParams.get('q') || ''
   const [localQ, setLocalQ] = useState(q)
@@ -129,8 +132,11 @@ function LeadsPageInner() {
           <Button variant="outline" size="sm" asChild>
             <Link href="/imports"><Upload className="h-4 w-4" />Import</Link>
           </Button>
-          <Button size="sm" onClick={() => setShowForm(true)}>
+          <Button variant="outline" size="sm" onClick={() => setShowForm(true)}>
             <Plus className="h-4 w-4" />Add Lead
+          </Button>
+          <Button size="sm" onClick={() => setComposeFor(null)}>
+            <Send className="h-4 w-4" />New Email
           </Button>
         </div>
       </div>
@@ -240,7 +246,7 @@ function LeadsPageInner() {
               ) : leads.length === 0 ? (
                 <tr>
                   <td colSpan={10} className="px-4 py-12 text-center text-slate-400">
-                    No leads found. <button onClick={() => setShowForm(true)} className="text-indigo-600 hover:underline">Add your first lead →</button>
+                    No leads found. <button onClick={() => setComposeFor(null)} className="text-indigo-600 hover:underline">Send your first email →</button>
                   </td>
                 </tr>
               ) : leads.map((lead) => {
@@ -288,7 +294,16 @@ function LeadsPageInner() {
                       <PriorityBadge priority={lead.priority} />
                     </td>
                     <td className="px-4 py-3">
-                      <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <div className="flex gap-1 items-center">
+                        {lead.companyEmail && (
+                          <button
+                            onClick={() => setComposeFor(lead)}
+                            title={lead.firstEmailSentAt ? 'Send an email' : 'Send first email'}
+                            className="flex items-center gap-1 px-2 py-1 rounded-md text-xs font-medium text-indigo-600 hover:bg-indigo-50"
+                          >
+                            <Send className="h-3.5 w-3.5" />Email
+                          </button>
+                        )}
                         <Link href={`/leads/${lead.id}`} className="p-1 rounded hover:bg-slate-200 text-slate-400 hover:text-slate-600">
                           <ExternalLink className="h-3.5 w-3.5" />
                         </Link>
@@ -327,7 +342,20 @@ function LeadsPageInner() {
         <LeadFormDialog
           open={showForm}
           onClose={() => setShowForm(false)}
-          onSaved={() => { setShowForm(false); mutate() }}
+          onSaved={(lead, thenEmail) => {
+            setShowForm(false)
+            mutate()
+            if (thenEmail && lead) setComposeFor(lead)
+          }}
+        />
+      )}
+
+      {composeFor !== undefined && (
+        <ComposeEmailDialog
+          open
+          onClose={() => setComposeFor(undefined)}
+          lead={composeFor ?? undefined}
+          onSent={() => mutate()}
         />
       )}
     </div>

@@ -117,6 +117,7 @@ export const STOP_FOLLOWUP_STATUSES: LeadStatus[] = [
   'NOT_INTERESTED',
   'UNSUBSCRIBED',
   'DO_NOT_CONTACT',
+  'INVALID_EMAIL',
 ]
 
 // ─── Misc helpers ────────────────────────────────────────────────────────────

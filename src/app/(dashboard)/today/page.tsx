@@ -284,9 +284,8 @@ export default function TodayPage() {
           onClose={() => { setComposeOpen(false); setComposeTask(null) }}
           lead={composeLead}
           taskId={composeTask?.id}
-          defaultSubject={composeTask?.subject ?? ''}
+          taskType={composeTask?.type}
           defaultBody={composeTask?.body ?? ''}
-          templateType={composeTask?.type ?? 'FIRST_EMAIL'}
           onSent={refresh}
         />
       )}

@@ -4,111 +4,105 @@ import { requireAuth } from '@/lib/auth'
 import { sendGmail } from '@/lib/gmail'
 import prisma from '@/lib/prisma'
 import { addDays } from 'date-fns'
+import { buildTemplateVars, renderTemplate, guessCompanyFromEmail, skipWeekend, FOLLOW_UP_TYPES } from '@/lib/template'
+import { refreshNextFollowUp } from '@/lib/followups'
 
 const sendSchema = z.object({
-  leadId: z.string(),
-  senderAccountId: z.string(),
-  subject: z.string().min(1),
-  body: z.string().min(1),
-  type: z.enum(['FIRST_EMAIL', 'FOLLOW_UP_1', 'FOLLOW_UP_2', 'FOLLOW_UP_3', 'REPLY', 'OTHER']),
+  // Either an existing lead…
+  leadId: z.string().optional(),
+  // …or a new one created on the fly ("New Email")
+  newLead: z.object({
+    email: z.string().email('Enter a valid email address'),
+    firstName: z.string().optional(),
+    lastName: z.string().optional(),
+    companyName: z.string().optional(),
+    campaignId: z.string().optional(),
+  }).optional(),
+  senderAccountId: z.string().min(1, 'Select a sender account'),
+  subject: z.string().trim().min(1, 'Subject is required'),
+  body: z.string().trim().min(1, 'Email body is required'),
+  type: z.enum(['FIRST_EMAIL', 'OTHER']).optional(),
+  // Follow-up plan (only used for the first email). Bodies are raw templates rendered at send time.
+  followUps: z.array(z.object({
+    step: z.number().int().min(1).max(3),
+    delayDays: z.number().int().min(1).max(60),
+    body: z.string().optional(),
+  })).max(3).optional(),
 })
 
 export async function POST(req: NextRequest) {
   const session = await requireAuth()
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
+  const parsed = sendSchema.safeParse(await req.json())
+  if (!parsed.success) {
+    return NextResponse.json({ error: parsed.error.errors[0]?.message || 'Invalid request' }, { status: 400 })
+  }
+  const input = parsed.data
+
   try {
-    const body = sendSchema.parse(await req.json())
-
-    const lead = await prisma.lead.findUnique({ where: { id: body.leadId } })
-    if (!lead) return NextResponse.json({ error: 'Lead not found' }, { status: 404 })
-    if (!lead.companyEmail) return NextResponse.json({ error: 'Lead has no email' }, { status: 400 })
-
-    // Check suppression list
-    const suppressed = await prisma.suppressionEntry.findFirst({
-      where: { email: lead.companyEmail.toLowerCase() },
-    })
-    if (suppressed) {
-      return NextResponse.json({ error: 'Email is on suppression list' }, { status: 400 })
-    }
-
-    const gmailMessage = await sendGmail({
-      senderAccountId: body.senderAccountId,
-      to: lead.companyEmail,
-      subject: body.subject,
-      body: body.body,
-    })
-
-    const now = new Date()
-
-    // Get campaign follow-up config
-    const campaign = lead.campaignId
-      ? await prisma.campaign.findUnique({ where: { id: lead.campaignId } })
+    // ── Resolve the lead ───────────────────────────────────────────────────────
+    let lead = input.leadId
+      ? await prisma.lead.findUnique({ where: { id: input.leadId } })
       : null
 
-    const day1 = campaign?.followUpDay1 ?? 1
-    const day2 = campaign?.followUpDay2 ?? 2
-    const day3 = campaign?.followUpDay3 ?? 3
-
-    // Update lead based on type
-    type LeadUpdate = {
-      status?: string
-      lastContactedAt?: Date
-      firstEmailSubject?: string
-      firstEmailBody?: string
-      firstEmailSentAt?: Date
-      followUp1Subject?: string
-      followUp1Body?: string
-      followUp1SentAt?: Date
-      followUp2Subject?: string
-      followUp2Body?: string
-      followUp2SentAt?: Date
-      followUp3Subject?: string
-      followUp3Body?: string
-      followUp3SentAt?: Date
-      nextFollowUpAt?: Date
-    }
-    let leadUpdate: LeadUpdate = { lastContactedAt: now }
-    let activityType = 'EMAIL_SENT'
-
-    if (body.type === 'FIRST_EMAIL') {
-      leadUpdate = {
-        ...leadUpdate,
-        status: 'FIRST_EMAIL_SENT',
-        firstEmailSubject: body.subject,
-        firstEmailBody: body.body,
-        firstEmailSentAt: now,
-        nextFollowUpAt: addDays(now, day1),
+    if (!lead && input.newLead) {
+      const email = input.newLead.email.trim().toLowerCase()
+      lead = await prisma.lead.findFirst({ where: { companyEmail: email } })
+      if (!lead) {
+        const { firstName, lastName, campaignId } = input.newLead
+        lead = await prisma.lead.create({
+          data: {
+            companyEmail: email,
+            firstName: firstName || undefined,
+            lastName: lastName || undefined,
+            fullName: [firstName, lastName].filter(Boolean).join(' ') || undefined,
+            companyName: input.newLead.companyName?.trim() || guessCompanyFromEmail(email) || email.split('@')[1],
+            campaignId: campaignId || undefined,
+            senderAccountId: input.senderAccountId,
+            leadSource: 'MANUAL',
+            assignedUserId: session.userId,
+          },
+        })
+        await prisma.activity.create({
+          data: { leadId: lead.id, userId: session.userId, type: 'NOTE_ADDED', title: 'Lead created', body: `Created from New Email by ${session.name}` },
+        })
       }
-      // Create follow-up tasks
-      await prisma.followUpTask.createMany({
-        data: [
-          { leadId: body.leadId, senderAccountId: body.senderAccountId, type: 'FOLLOW_UP_1', scheduledAt: addDays(now, day1), subject: lead.followUp1Subject || undefined, body: lead.followUp1Body || undefined },
-          { leadId: body.leadId, senderAccountId: body.senderAccountId, type: 'FOLLOW_UP_2', scheduledAt: addDays(now, day2), subject: lead.followUp2Subject || undefined, body: lead.followUp2Body || undefined },
-          { leadId: body.leadId, senderAccountId: body.senderAccountId, type: 'FOLLOW_UP_3', scheduledAt: addDays(now, day3), subject: lead.followUp3Subject || undefined, body: lead.followUp3Body || undefined },
-        ],
-      })
-    } else if (body.type === 'FOLLOW_UP_1') {
-      leadUpdate = { ...leadUpdate, status: 'FOLLOW_UP_1_SENT', followUp1Subject: body.subject, followUp1Body: body.body, followUp1SentAt: now, nextFollowUpAt: addDays(now, day2 - day1) }
-      activityType = 'FOLLOW_UP_SENT'
-    } else if (body.type === 'FOLLOW_UP_2') {
-      leadUpdate = { ...leadUpdate, status: 'FOLLOW_UP_2_SENT', followUp2Subject: body.subject, followUp2Body: body.body, followUp2SentAt: now, nextFollowUpAt: addDays(now, day3 - day2) }
-      activityType = 'FOLLOW_UP_SENT'
-    } else if (body.type === 'FOLLOW_UP_3') {
-      leadUpdate = { ...leadUpdate, status: 'FOLLOW_UP_3_SENT', followUp3Subject: body.subject, followUp3Body: body.body, followUp3SentAt: now }
-      activityType = 'FOLLOW_UP_SENT'
     }
 
-    await prisma.lead.update({ where: { id: body.leadId }, data: leadUpdate })
+    if (!lead) return NextResponse.json({ error: 'Lead not found' }, { status: 404 })
+    if (!lead.companyEmail) return NextResponse.json({ error: 'This lead has no email address' }, { status: 400 })
 
-    // Save email message
+    const suppressed = await prisma.suppressionEntry.findFirst({ where: { email: lead.companyEmail.toLowerCase() } })
+    if (suppressed) return NextResponse.json({ error: 'This email is on the do-not-contact list' }, { status: 400 })
+
+    const sender = await prisma.senderAccount.findUnique({ where: { id: input.senderAccountId } })
+    if (!sender) return NextResponse.json({ error: 'Sender account not found' }, { status: 400 })
+    if (sender.gmailStatus !== 'CONNECTED') {
+      return NextResponse.json({ error: `${sender.email} is not connected to Gmail — reconnect it in Sender Accounts` }, { status: 400 })
+    }
+
+    const type = input.type ?? (lead.firstEmailSentAt ? 'OTHER' : 'FIRST_EMAIL')
+    const vars = buildTemplateVars(lead, sender)
+    const subject = renderTemplate(input.subject, vars)
+    const body = renderTemplate(input.body, vars)
+
+    // ── Send ───────────────────────────────────────────────────────────────────
+    const gmailMessage = await sendGmail({
+      senderAccountId: sender.id,
+      to: lead.companyEmail,
+      subject,
+      body,
+    })
+    const now = new Date()
+
     await prisma.emailMessage.create({
       data: {
-        leadId: body.leadId,
+        leadId: lead.id,
         direction: 'OUTBOUND',
-        subject: body.subject,
-        body: body.body,
-        fromAddress: body.senderAccountId,
+        subject,
+        body,
+        fromAddress: sender.email,
         toAddress: lead.companyEmail,
         sentAt: now,
         gmailMessageId: gmailMessage.id || undefined,
@@ -116,19 +110,65 @@ export async function POST(req: NextRequest) {
       },
     })
 
-    // Log activity
+    await prisma.lead.update({
+      where: { id: lead.id },
+      data: {
+        lastContactedAt: now,
+        senderAccountId: lead.senderAccountId || sender.id,
+        ...(type === 'FIRST_EMAIL'
+          ? { status: 'FIRST_EMAIL_SENT', firstEmailSubject: subject, firstEmailBody: body, firstEmailSentAt: now }
+          : {}),
+      },
+    })
+
+    // ── Schedule follow-ups (first email only) ─────────────────────────────────
+    let scheduled = 0
+    if (type === 'FIRST_EMAIL') {
+      // Replace any plan left over from an earlier first email
+      await prisma.followUpTask.updateMany({
+        where: { leadId: lead.id, status: 'PENDING' },
+        data: { status: 'CANCELLED' },
+      })
+
+      let plan = input.followUps
+      if (!plan) {
+        // No plan sent → use the campaign schedule; bodies come from templates at send time
+        const campaign = lead.campaignId ? await prisma.campaign.findUnique({ where: { id: lead.campaignId } }) : null
+        plan = [
+          { step: 1, delayDays: campaign?.followUpDay1 ?? 3 },
+          { step: 2, delayDays: campaign?.followUpDay2 ?? 7 },
+          { step: 3, delayDays: campaign?.followUpDay3 ?? 14 },
+        ]
+      }
+
+      if (plan.length) {
+        await prisma.followUpTask.createMany({
+          data: plan.map(f => ({
+            leadId: lead.id,
+            senderAccountId: sender.id,
+            type: FOLLOW_UP_TYPES[f.step - 1],
+            scheduledAt: skipWeekend(addDays(now, f.delayDays)),
+            body: f.body?.trim() || null,
+          })),
+        })
+        scheduled = plan.length
+      }
+      await refreshNextFollowUp(lead.id)
+    }
+
     await prisma.activity.create({
       data: {
-        leadId: body.leadId,
+        leadId: lead.id,
         userId: session.userId,
-        senderAccountId: body.senderAccountId,
-        type: activityType,
-        title: body.subject,
+        senderAccountId: sender.id,
+        type: 'EMAIL_SENT',
+        title: type === 'FIRST_EMAIL' ? `First email sent: ${subject}` : `Email sent: ${subject}`,
+        body: scheduled ? `${scheduled} follow-up${scheduled > 1 ? 's' : ''} scheduled` : undefined,
         metadata: { gmailMessageId: gmailMessage.id },
       },
     })
 
-    return NextResponse.json({ ok: true, gmailMessageId: gmailMessage.id })
+    return NextResponse.json({ ok: true, leadId: lead.id, gmailMessageId: gmailMessage.id, followUpsScheduled: scheduled })
   } catch (err: unknown) {
     console.error('[email/send]', err)
     const msg = err instanceof Error ? err.message : 'Failed to send email'

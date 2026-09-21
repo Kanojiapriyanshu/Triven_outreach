@@ -6,7 +6,7 @@ import { toast } from 'sonner'
 import {
   ArrowLeft, Globe, Link2, Phone, Mail, Building2,
   MapPin, Send, Clock, Video, Calendar, DollarSign,
-  MessageSquare, Plus, AlertCircle, PenLine,
+  MessageSquare, Plus, AlertCircle, PenLine, StopCircle, SkipForward,
 } from 'lucide-react'
 import ComposeEmailDialog from '@/components/email/ComposeEmailDialog'
 import { Button } from '@/components/ui/button'
@@ -21,6 +21,18 @@ import { fmtDate, fmtDateTime, fmtCurrency, getDisplayName, STATUS_LABELS } from
 import type { LeadRow } from '@/types'
 
 const fetcher = (url: string) => fetch(url).then((r) => r.json())
+
+interface FollowUpTaskRow {
+  id: string; type: string; subject: string | null; body: string | null
+  scheduledAt: string; status: string; sentAt: string | null
+}
+
+const TASK_BADGE: Record<string, { label: string; variant: 'success' | 'secondary' | 'default' | 'destructive' }> = {
+  PENDING:   { label: 'Scheduled', variant: 'default' },
+  SENT:      { label: 'Sent',      variant: 'success' },
+  SKIPPED:   { label: 'Skipped',   variant: 'secondary' },
+  CANCELLED: { label: 'Stopped',   variant: 'secondary' },
+}
 
 const ALL_STATUSES = [
   'NEW','RESEARCHING','READY_TO_CONTACT','FIRST_EMAIL_SENT',
@@ -51,7 +63,10 @@ function ActivityIcon({ type }: { type: string }) {
 
 export default function LeadDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params)
-  const { data: lead, mutate } = useSWR<LeadRow & { activities: Array<{ id: string; type: string; title: string; body?: string; createdAt: string; user?: { name: string } }> }>(
+  const { data: lead, mutate } = useSWR<LeadRow & {
+    activities: Array<{ id: string; type: string; title: string; body?: string; createdAt: string; user?: { name: string } }>
+    followUpTasks: FollowUpTaskRow[]
+  }>(
     `/api/leads/${id}`,
     fetcher
   )
@@ -59,6 +74,8 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
   const [addingNote, setAddingNote] = useState(false)
   const [savingNote, setSavingNote] = useState(false)
   const [composeOpen, setComposeOpen] = useState(false)
+  const [composeTask, setComposeTask] = useState<FollowUpTaskRow | null>(null)
+  const [busyTask, setBusyTask]       = useState<string | null>(null)
 
   if (!lead) return (
     <div className="flex items-center justify-center h-64 text-slate-400">
@@ -100,7 +117,39 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
     mutate()
   }
 
+  async function sendTaskNow(task: FollowUpTaskRow) {
+    setBusyTask(task.id)
+    const res = await fetch(`/api/followups/${task.id}`, { method: 'POST' })
+    const data = await res.json().catch(() => ({}))
+    setBusyTask(null)
+    if (res.ok) toast.success('Follow-up sent')
+    else toast.error(data.error || 'Failed to send')
+    mutate()
+  }
+
+  async function skipTask(taskId: string) {
+    await fetch(`/api/followups/${taskId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'SKIPPED' }),
+    })
+    mutate()
+  }
+
+  async function stopFollowUps() {
+    if (!confirm('Stop all scheduled follow-ups for this lead?')) return
+    await fetch('/api/leads/bulk', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ leadIds: [id], action: 'pause_sequence' }),
+    })
+    toast.success('Follow-ups stopped')
+    mutate()
+  }
+
   const displayName = getDisplayName(lead)
+  const tasks = (lead.followUpTasks || []).filter((t) => t.type.startsWith('FOLLOW_UP'))
+  const pendingTasks = tasks.filter((t) => t.status === 'PENDING')
 
   return (
     <div className="max-w-6xl mx-auto space-y-6">
@@ -116,12 +165,11 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
         <div className="flex gap-2 items-center">
           <Button
             size="sm"
-            variant="outline"
-            onClick={() => setComposeOpen(true)}
+            onClick={() => { setComposeTask(null); setComposeOpen(true) }}
             disabled={!lead.companyEmail}
             title={!lead.companyEmail ? 'No email address on this lead' : 'Compose personalised email'}
           >
-            <PenLine className="h-3.5 w-3.5" />Compose Email
+            <PenLine className="h-3.5 w-3.5" />{lead.firstEmailSentAt ? 'Email' : 'Send First Email'}
           </Button>
           <StatusBadge status={lead.status} className="text-sm px-3 py-1" />
           <Select value={lead.status} onValueChange={updateStatus}>
@@ -273,35 +321,76 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
 
           {/* Outreach sequence */}
           <Card>
-            <CardHeader><CardTitle>Outreach Sequence</CardTitle></CardHeader>
-            <CardContent className="pt-0">
-              <div className="space-y-4">
-                {[
-                  { label: 'First Email', subject: lead.firstEmailSubject, body: lead.firstEmailBody, sentAt: lead.firstEmailSentAt },
-                  { label: 'Follow-up 1', subject: lead.followUp1Subject, body: lead.followUp1Body, sentAt: lead.followUp1SentAt },
-                  { label: 'Follow-up 2', subject: lead.followUp2Subject, body: lead.followUp2Body, sentAt: lead.followUp2SentAt },
-                  { label: 'Follow-up 3', subject: lead.followUp3Subject, body: lead.followUp3Body, sentAt: lead.followUp3SentAt },
-                ].map(({ label, subject, body, sentAt }, i) => (
-                  <div key={i} className={`rounded-lg border p-3 ${sentAt ? 'border-slate-200 bg-slate-50' : 'border-dashed border-slate-200'}`}>
-                    <div className="flex items-center justify-between mb-2">
-                      <p className="text-xs font-semibold text-slate-500 uppercase">{label}</p>
-                      {sentAt ? (
-                        <Badge variant="success" className="text-xs">Sent {fmtDate(sentAt)}</Badge>
-                      ) : (
-                        <Badge variant="secondary" className="text-xs">Not sent</Badge>
-                      )}
+            <CardHeader>
+              <div className="flex items-center justify-between">
+                <CardTitle>Outreach Sequence</CardTitle>
+                {pendingTasks.length > 0 && (
+                  <Button size="sm" variant="ghost" className="text-slate-500" onClick={stopFollowUps}>
+                    <StopCircle className="h-4 w-4" />Stop follow-ups
+                  </Button>
+                )}
+              </div>
+            </CardHeader>
+            <CardContent className="pt-0 space-y-3">
+              {/* First email */}
+              <div className={`rounded-lg border p-3 ${lead.firstEmailSentAt ? 'border-slate-200 bg-slate-50' : 'border-dashed border-slate-300'}`}>
+                <div className="flex items-center justify-between mb-1">
+                  <p className="text-xs font-semibold text-slate-500 uppercase">First Email</p>
+                  {lead.firstEmailSentAt
+                    ? <Badge variant="success" className="text-xs">Sent {fmtDate(lead.firstEmailSentAt)}</Badge>
+                    : <Badge variant="secondary" className="text-xs">Not sent</Badge>}
+                </div>
+                {lead.firstEmailSentAt ? (
+                  <>
+                    <p className="text-sm font-medium text-slate-800">{lead.firstEmailSubject}</p>
+                    {lead.firstEmailBody && <p className="text-xs text-slate-500 mt-1 line-clamp-2">{lead.firstEmailBody}</p>}
+                  </>
+                ) : (
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="text-xs text-slate-400">Send the first email and follow-ups are scheduled automatically.</p>
+                    <Button size="sm" onClick={() => { setComposeTask(null); setComposeOpen(true) }} disabled={!lead.companyEmail}>
+                      <Send className="h-3.5 w-3.5" />Write email
+                    </Button>
+                  </div>
+                )}
+              </div>
+
+              {/* Follow-ups */}
+              {tasks.length === 0 ? (
+                lead.firstEmailSentAt && <p className="text-xs text-slate-400 px-1">No follow-ups scheduled.</p>
+              ) : tasks.map((task) => {
+                const badge = TASK_BADGE[task.status] || TASK_BADGE.PENDING
+                const pending = task.status === 'PENDING'
+                return (
+                  <div key={task.id} className={`rounded-lg border p-3 ${pending ? 'border-indigo-100 bg-indigo-50/40' : 'border-slate-200'}`}>
+                    <div className="flex items-center justify-between gap-2 mb-1">
+                      <p className="text-xs font-semibold text-slate-500 uppercase">{task.type.replace(/_/g, ' ').replace('FOLLOW UP', 'Follow-up')}</p>
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs text-slate-400">
+                          {task.status === 'SENT' ? fmtDateTime(task.sentAt) : fmtDate(task.scheduledAt, 'EEE, MMM d')}
+                        </span>
+                        <Badge variant={badge.variant} className="text-xs">{badge.label}</Badge>
+                      </div>
                     </div>
-                    {subject ? (
-                      <>
-                        <p className="text-sm font-medium text-slate-800">{subject}</p>
-                        {body && <p className="text-xs text-slate-500 mt-1 line-clamp-2">{body}</p>}
-                      </>
-                    ) : (
-                      <p className="text-xs text-slate-400 italic">No email written yet</p>
+                    <p className="text-xs text-slate-500 line-clamp-2">
+                      {task.body || <span className="italic text-slate-400">Uses your default follow-up template</span>}
+                    </p>
+                    {pending && (
+                      <div className="flex gap-1 mt-2 -ml-2">
+                        <Button size="sm" variant="ghost" className="h-7 text-xs" loading={busyTask === task.id} onClick={() => sendTaskNow(task)}>
+                          <Send className="h-3 w-3" />Send now
+                        </Button>
+                        <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => { setComposeTask(task); setComposeOpen(true) }}>
+                          <PenLine className="h-3 w-3" />Edit &amp; send
+                        </Button>
+                        <Button size="sm" variant="ghost" className="h-7 text-xs text-slate-400" onClick={() => skipTask(task.id)}>
+                          <SkipForward className="h-3 w-3" />Skip
+                        </Button>
+                      </div>
                     )}
                   </div>
-                ))}
-              </div>
+                )
+              })}
             </CardContent>
           </Card>
 
@@ -399,8 +488,13 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
             city:            lead.city,
             industry:        lead.industry,
             senderAccountId: lead.senderAccountId,
+            campaignId:      lead.campaignId,
+            firstEmailSentAt: lead.firstEmailSentAt,
           }}
-          onSent={mutate}
+          taskId={composeTask?.id}
+          taskType={composeTask?.type}
+          defaultBody={composeTask?.body ?? ''}
+          onSent={() => mutate()}
         />
       )}
     </div>
