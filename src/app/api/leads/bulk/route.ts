@@ -9,7 +9,7 @@ import { refreshNextFollowUp } from '@/lib/followups'
 
 const bulkSchema = z.object({
   leadIds: z.array(z.string()).min(1),
-  action: z.enum(['assign_campaign', 'assign_sender', 'change_status', 'set_priority', 'pause_sequence', 'resume_sequence', 'archive']),
+  action: z.enum(['assign_campaign', 'assign_sender', 'change_status', 'set_priority', 'pause_sequence', 'resume_sequence', 'archive', 'delete']),
   value: z.string().optional(),
 })
 
@@ -22,6 +22,17 @@ export async function POST(req: NextRequest) {
   const { leadIds, action, value } = parsed.data
 
   switch (action) {
+    case 'delete': {
+      // Emails, activity and follow-ups are removed with the lead (cascade);
+      // notifications only hold a plain leadId, so clear those too
+      let deleted = 0
+      for (let i = 0; i < leadIds.length; i += 500) {
+        const chunk = leadIds.slice(i, i + 500)
+        await prisma.notification.deleteMany({ where: { leadId: { in: chunk } } })
+        deleted += (await prisma.lead.deleteMany({ where: { id: { in: chunk } } })).count
+      }
+      return NextResponse.json({ deleted })
+    }
     case 'assign_campaign':
       await prisma.lead.updateMany({ where: { id: { in: leadIds } }, data: { campaignId: value || null } })
       break

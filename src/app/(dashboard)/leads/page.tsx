@@ -66,6 +66,7 @@ function LeadsPageInner() {
     p.delete('page')
     router.push(`/leads?${p.toString()}`)
     setPage(1)
+    setSelectedIds(new Set()) // never keep (and later delete) leads the new filter hides
   }
 
   function handleSearch(e: React.FormEvent) {
@@ -82,7 +83,7 @@ function LeadsPageInner() {
   }
 
   function toggleSelectAll() {
-    if (selectedIds.size === leads.length) {
+    if (leads.length && leads.every((l) => selectedIds.has(l.id))) {
       setSelectedIds(new Set())
     } else {
       setSelectedIds(new Set(leads.map((l) => l.id)))
@@ -94,6 +95,41 @@ function LeadsPageInner() {
     await fetch(`/api/leads/${id}`, { method: 'DELETE' })
     toast.success('Lead deleted')
     mutate()
+  }
+
+  // "Select all N leads": every lead matching the current filters, across all pages
+  const [selectingAll, setSelectingAll] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+  const pageAllSelected = leads.length > 0 && leads.every((l) => selectedIds.has(l.id))
+  const selectionSpansPages = [...selectedIds].some((id) => !leads.some((l) => l.id === id))
+
+  async function selectAllMatching() {
+    setSelectingAll(true)
+    try {
+      const res = await fetch(`/api/leads/ids?${new URLSearchParams({ q, status, campaignId, senderAccountId }).toString()}`)
+      const d = await res.json()
+      setSelectedIds(new Set(d.ids as string[]))
+    } finally { setSelectingAll(false) }
+  }
+
+  async function deleteSelected() {
+    const n = selectedIds.size
+    if (!n) return
+    if (!confirm(`Delete ${n.toLocaleString()} lead${n > 1 ? 's' : ''}? Their emails, replies, follow-ups and history are deleted too. This cannot be undone.`)) return
+    setDeleting(true)
+    try {
+      const res = await fetch('/api/leads/bulk', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ leadIds: Array.from(selectedIds), action: 'delete' }),
+      })
+      const d = await res.json().catch(() => ({}))
+      if (!res.ok) return toast.error(d.error || 'Could not delete')
+      toast.success(`Deleted ${(d.deleted ?? n).toLocaleString()} lead${(d.deleted ?? n) === 1 ? '' : 's'}`)
+      setSelectedIds(new Set())
+      setPage(1)
+      mutate()
+    } finally { setDeleting(false) }
   }
 
   async function handleBulkAction(action: string, value?: string) {
@@ -191,9 +227,30 @@ function LeadsPageInner() {
 
         {/* Bulk actions */}
         {selectedIds.size > 0 && (
-          <div className="mt-3 flex items-center gap-3 pt-3 border-t border-slate-100">
-            <span className="text-sm text-slate-600 font-medium">{selectedIds.size} selected</span>
-            <Button size="sm" onClick={() => setShowBulk(true)}><Send className="h-3.5 w-3.5" />Send email</Button>
+          <div className="mt-3 pt-3 border-t border-slate-100 space-y-2">
+          {pageAllSelected && total > leads.length && selectedIds.size < total && (
+            <div className="rounded-lg bg-indigo-50 px-3 py-2 text-sm text-indigo-900">
+              All {leads.length} leads on this page are selected.{' '}
+              <button onClick={selectAllMatching} disabled={selectingAll} className="font-semibold underline">
+                {selectingAll ? 'Selecting…' : `Select all ${total.toLocaleString()} leads`}
+              </button>
+            </div>
+          )}
+          {selectedIds.size === total && total > leads.length && (
+            <div className="rounded-lg bg-indigo-50 px-3 py-2 text-sm text-indigo-900">
+              All {total.toLocaleString()} leads{q || status || campaignId || senderAccountId ? ' matching your filters' : ''} are selected.
+            </div>
+          )}
+          <div className="flex flex-wrap items-center gap-3">
+            <span className="text-sm text-slate-600 font-medium">{selectedIds.size.toLocaleString()} selected</span>
+            <Button
+              size="sm"
+              onClick={() => setShowBulk(true)}
+              disabled={selectionSpansPages}
+              title={selectionSpansPages ? 'Bulk email works on the leads shown on this page. For bigger batches, import them into a campaign.' : undefined}
+            >
+              <Send className="h-3.5 w-3.5" />Send email
+            </Button>
             <Button size="sm" variant="outline" onClick={() => handleBulkAction('pause_sequence')}>Pause Sequence</Button>
             <Button size="sm" variant="outline" onClick={() => handleBulkAction('resume_sequence')}>Resume</Button>
             <Select onValueChange={(v) => handleBulkAction('change_status', v)}>
@@ -202,7 +259,11 @@ function LeadsPageInner() {
                 {ALL_STATUSES.map((s) => <SelectItem key={s} value={s}>{s.replace(/_/g, ' ')}</SelectItem>)}
               </SelectContent>
             </Select>
+            <Button size="sm" variant="outline" className="text-red-600 border-red-200 hover:bg-red-50" onClick={deleteSelected} loading={deleting}>
+              <Trash2 className="h-3.5 w-3.5" />Delete
+            </Button>
             <Button size="sm" variant="ghost" className="text-slate-400" onClick={() => setSelectedIds(new Set())}>Clear</Button>
+          </div>
           </div>
         )}
       </Card>
@@ -216,7 +277,7 @@ function LeadsPageInner() {
                 <th className="w-10 px-4 py-3">
                   <input
                     type="checkbox"
-                    checked={selectedIds.size > 0 && selectedIds.size === leads.length}
+                    checked={leads.length > 0 && leads.every((l) => selectedIds.has(l.id))}
                     onChange={toggleSelectAll}
                     className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
                   />
