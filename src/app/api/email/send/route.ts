@@ -7,6 +7,7 @@ import { refreshNextFollowUp } from '@/lib/followups'
 import { deliverEmail, assertSendable, scheduleFollowUps, dailyAllowance, OutreachError, type FollowUpPlanStep } from '@/lib/outreach'
 import { getSettings } from '@/lib/settings'
 import { nextWindowSlot } from '@/lib/send-window'
+import { campaignSchedule } from '@/lib/schedule'
 
 const sendSchema = z.object({
   // Either an existing lead…
@@ -115,7 +116,7 @@ export async function POST(req: NextRequest) {
         },
       })
       const scheduled = kind === 'FIRST_EMAIL'
-        ? await scheduleFollowUps({ leadId: lead.id, senderAccountId: sender.id, base: sendAt, plan, window: settings.sendWindow })
+        ? await scheduleFollowUps({ leadId: lead.id, senderAccountId: sender.id, base: sendAt, plan, window: campaignSchedule(campaign, settings).window })
         : 0
       await prisma.lead.update({ where: { id: lead.id }, data: { senderAccountId: lead.senderAccountId || sender.id } })
       await refreshNextFollowUp(lead.id)
@@ -151,7 +152,7 @@ export async function POST(req: NextRequest) {
         where: { leadId: lead.id, type: 'FIRST_EMAIL', status: 'PENDING' },
         data: { status: 'CANCELLED' },
       })
-      scheduled = await scheduleFollowUps({ leadId: lead.id, senderAccountId: sender.id, base: new Date(), plan, window: settings.sendWindow })
+      scheduled = await scheduleFollowUps({ leadId: lead.id, senderAccountId: sender.id, base: new Date(), plan, window: campaignSchedule(campaign, settings).window })
       await refreshNextFollowUp(lead.id)
     }
 

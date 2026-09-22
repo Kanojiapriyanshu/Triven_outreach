@@ -165,8 +165,9 @@ export function signalVars(src: SignalSource, firstName: string): Record<string,
   const name = s.roleInbox ? (hasCompany ? team : (s.doctorName || 'there')) : (s.doctorName || firstName || team)
 
   // 1. A genuine compliment first, when the research gives us one
+  // Talking to the doctor directly → "your" nomination; to the front desk → "for Dr. Neely"
   const praise = s.award
-    ? `Congrats on the ${s.award} nomination${s.doctorName ? ` for ${s.doctorName}` : ''}.`
+    ? (name === s.doctorName ? `Congrats on your ${s.award} nomination.` : `Congrats on the ${s.award} nomination${s.doctorName ? ` for ${s.doctorName}` : ''}.`)
     : s.rating ? `${s.rating} is rare, and it usually means the phone at ${company} rarely stops.`
     : s.topRated ? `${company} being one of the top-rated practices on Google${src.city ? ` in ${src.city}` : ''} usually means a busy phone.`
     : s.since ? `Running an independent practice ${s.since} is rare these days.`

@@ -8,7 +8,7 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription,
 } from '@/components/ui/dialog'
 import { buildTemplateVars, renderTemplate, pickDefaultTemplate, checkLeadData, type TemplateLead } from '@/lib/template'
-import { describeWindow, DEFAULT_SEND_WINDOW, type SendWindow } from '@/lib/send-window'
+import { DEFAULT_SEND_WINDOW, DAY_LABELS, fmtInZone, staggeredSlots, type SendWindow } from '@/lib/send-window'
 
 const fetcher = (url: string) => fetch(url).then((r) => r.json())
 
@@ -35,8 +35,14 @@ export default function BulkSendDialog({ leads, onClose, onDone }: { leads: Bulk
 
   const [templateId, setTemplateId] = useState(EACH)
   const [picked, setPicked] = useState<string[] | null>(null) // null = all connected
-  const [start, setStart] = useState<'now' | 'window' | 'custom'>('window')
+  const [start, setStart] = useState<'now' | 'custom'>('now')
   const [customAt, setCustomAt] = useState('')
+  // Pacing (Instantly-style): sending hours, days, and gap between emails
+  const [winStart, setWinStart] = useState<string | null>(null)
+  const [winEnd, setWinEnd] = useState<string | null>(null)
+  const [days, setDays] = useState<number[]>([1, 2, 3, 4, 5])
+  const [gapMin, setGapMin] = useState(3)
+  const [gapMax, setGapMax] = useState(5)
   const [index, setIndex] = useState(0)
   const [sending, setSending] = useState(false)
 
@@ -62,14 +68,22 @@ export default function BulkSendDialog({ leads, onClose, onDone }: { leads: Bulk
   const thin = previews.filter((p) => p.check.level === 'thin').length
   const noTemplate = previews.filter((p) => !p.template).length
   const perDay = inboxes.reduce((n, id) => n + (allowance?.[id]?.limit ?? 0), 0)
-  const days = perDay ? Math.ceil(eligible.length / perDay) : null
+  const estDays = perDay ? Math.ceil(eligible.length / perDay) : null
   const current = previews[Math.min(index, previews.length - 1)]
   const w = settings?.sendWindow ?? DEFAULT_SEND_WINDOW
+  const win: SendWindow = { ...w, start: winStart ?? w.start, end: winEnd ?? w.end, days }
+  const fromDate = start === 'custom' && customAt ? new Date(customAt) : new Date()
+  // Same maths as the server, so the timeline shown is what will happen
+  const timeline = useMemo(
+    () => staggeredSlots(eligible.length, fromDate, win, gapMin, Math.max(gapMin, gapMax), Math.max(1, perDay || Infinity), () => 0.5),
+    [eligible.length, fromDate.getTime(), win.start, win.end, days.join(), gapMin, gapMax, perDay], // eslint-disable-line react-hooks/exhaustive-deps
+  )
 
   async function submit() {
     if (!eligible.length) return toast.error('None of the selected leads can be emailed')
     if (!inboxes.length) return toast.error('Pick at least one inbox')
     if (start === 'custom' && !customAt) return toast.error('Pick a start date and time')
+    if (!days.length) return toast.error('Pick at least one sending day')
     setSending(true)
     try {
       const res = await fetch('/api/email/bulk', {
@@ -79,13 +93,14 @@ export default function BulkSendDialog({ leads, onClose, onDone }: { leads: Bulk
           leadIds: eligible.map((l) => l.id),
           templateId: templateId === EACH ? undefined : templateId,
           senderAccountIds: inboxes,
-          start: start === 'custom' ? new Date(customAt).toISOString() : start,
+          start: start === 'custom' ? new Date(customAt).toISOString() : 'now',
+          schedule: { windowStart: win.start, windowEnd: win.end, days, gapMin, gapMax: Math.max(gapMin, gapMax) },
         }),
       })
       const d = await res.json().catch(() => ({}))
       if (!res.ok) return toast.error(d.error || 'Could not queue emails')
       const skippedTotal = Object.values(d.skipped as Record<string, number>).reduce((a, b) => a + b, 0)
-      toast.success(`${d.queued} emails queued across ${d.inboxes} inboxes${d.estimatedDays ? ` · about ${d.estimatedDays} day${d.estimatedDays > 1 ? 's' : ''}` : ''}${skippedTotal ? ` · ${skippedTotal} skipped` : ''}`)
+      toast.success(`${d.queued} emails queued across ${d.inboxes} inboxes${d.startAt ? ` · first ${fmtInZone(d.startAt, w, 'EEE h:mm a')}, last ${fmtInZone(d.lastAt, w, 'EEE h:mm a')}` : ''}${skippedTotal ? ` · ${skippedTotal} skipped` : ''}`)
       onDone()
     } finally { setSending(false) }
   }
@@ -96,8 +111,8 @@ export default function BulkSendDialog({ leads, onClose, onDone }: { leads: Bulk
         <DialogHeader className="px-6 pt-5 pb-4 border-b border-slate-100 shrink-0">
           <DialogTitle className="flex items-center gap-2"><Send className="h-4 w-4 text-indigo-600" />Send to {eligible.length} lead{eligible.length === 1 ? '' : 's'}</DialogTitle>
           <DialogDescription>
-            Each email is written with that lead&apos;s own details, then sent in rotation across your inboxes,
-            {' '}{settings?.minGapMinutes ?? 8}–{settings?.maxGapMinutes ?? 15} min apart per inbox. Follow-ups are planned automatically.
+            Each email is written with that lead&apos;s own details and goes out on your schedule: one email, switch to the next inbox,
+            wait {gapMin}–{Math.max(gapMin, gapMax)} min, repeat. Follow-ups are planned automatically.
             {excluded > 0 && <> {excluded} selected lead{excluded > 1 ? 's are' : ' is'} left out (no email or already contacted).</>}
           </DialogDescription>
         </DialogHeader>
@@ -140,27 +155,65 @@ export default function BulkSendDialog({ leads, onClose, onDone }: { leads: Bulk
               </div>
             </div>
 
-            <div>
-              <p className="text-xs font-medium text-slate-500 mb-1.5">Start</p>
-              <div className="space-y-1.5 text-sm">
-                {([
-                  ['window', `Next send window (${describeWindow(w)})`],
-                  ['now', 'Right away'],
-                  ['custom', 'On a date and time'],
-                ] as const).map(([v, label]) => (
-                  <label key={v} className="flex items-center gap-2 cursor-pointer">
-                    <input type="radio" checked={start === v} onChange={() => setStart(v)} className="text-indigo-600" />{label}
-                  </label>
-                ))}
+            <div className="space-y-2.5">
+              <p className="text-xs font-medium text-slate-500">Schedule</p>
+              <div className="flex items-center gap-1.5 text-sm text-slate-600">
+                <input type="time" value={win.start} onChange={(e) => setWinStart(e.target.value)} className="h-8 w-[6.5rem] rounded-lg border border-slate-300 px-2 text-sm" />
+                to
+                <input
+                  type="time"
+                  value={win.end === '24:00' ? '00:00' : win.end}
+                  onChange={(e) => setWinEnd(e.target.value === '00:00' ? '24:00' : e.target.value)}
+                  className="h-8 w-[6.5rem] rounded-lg border border-slate-300 px-2 text-sm"
+                />
+              </div>
+              <div className="flex flex-wrap gap-1">
+                {DAY_LABELS.map((d, i) => {
+                  const day = i + 1
+                  const on = days.includes(day)
+                  return (
+                    <button
+                      key={d}
+                      type="button"
+                      onClick={() => setDays(on ? days.filter((x) => x !== day) : [...days, day])}
+                      className={`w-10 py-0.5 rounded text-[11px] font-medium border ${on ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-slate-500 border-slate-300'}`}
+                    >
+                      {d}
+                    </button>
+                  )
+                })}
+              </div>
+              <div className="flex items-center gap-1.5 text-sm text-slate-600">
+                Gap
+                <input type="number" min={1} value={gapMin} onChange={(e) => setGapMin(Math.max(1, Number(e.target.value) || 1))} className="h-8 w-14 rounded-lg border border-slate-300 px-2 text-sm" />
+                to
+                <input type="number" min={1} value={gapMax} onChange={(e) => setGapMax(Math.max(1, Number(e.target.value) || 1))} className="h-8 w-14 rounded-lg border border-slate-300 px-2 text-sm" />
+                min between emails
+              </div>
+              <div className="space-y-1 text-sm">
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input type="radio" checked={start === 'now'} onChange={() => setStart('now')} className="text-indigo-600" />
+                  Start now (or when the hours above begin)
+                </label>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input type="radio" checked={start === 'custom'} onChange={() => setStart('custom')} className="text-indigo-600" />
+                  Start on a date
+                </label>
                 {start === 'custom' && (
                   <input type="datetime-local" value={customAt} onChange={(e) => setCustomAt(e.target.value)} className="h-8 w-full rounded-lg border border-slate-300 px-2 text-sm" />
                 )}
               </div>
+              <p className="text-[11px] text-slate-400">Times are {w.timezone.replace('_', ' ')}. One email, switch inbox, wait {gapMin}–{Math.max(gapMin, gapMax)} min, next.</p>
             </div>
 
             <div className="rounded-lg bg-slate-50 border border-slate-200 p-3 text-xs text-slate-600 space-y-1">
-              <p><strong>{eligible.length}</strong> emails · <strong>{inboxes.length}</strong> inboxes · about <strong>{perDay}</strong>/day</p>
-              {days && <p>Finishes in about <strong>{days}</strong> sending day{days > 1 ? 's' : ''} (limits rise as inboxes warm up).</p>}
+              <p><strong>{eligible.length}</strong> emails · <strong>{inboxes.length}</strong> inboxes · up to <strong>{perDay}</strong>/day</p>
+              {timeline.length > 0 && (
+                <p>
+                  First <strong>{fmtInZone(timeline[0], w, 'EEE h:mm a')}</strong>, last <strong>{fmtInZone(timeline[timeline.length - 1], w, 'EEE h:mm a')}</strong>
+                  {estDays && estDays > 1 ? <> · spread over {estDays} sending days (daily limits)</> : null}
+                </p>
+              )}
               {thin > 0 && <p className="text-amber-700">{thin} lead{thin > 1 ? 's have' : ' has'} thin data and will get a more general email. Preview them on the right.</p>}
               {noTemplate > 0 && <p className="text-red-600">{noTemplate} lead{noTemplate > 1 ? 's have' : ' has'} no first-email template for their niche and will be skipped.</p>}
             </div>

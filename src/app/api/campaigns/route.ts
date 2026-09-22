@@ -15,6 +15,11 @@ const campaignSchema = z.object({
   followUpDay2: z.number().int().min(1).optional(),
   followUpDay3: z.number().int().min(1).optional(),
   dailyNewLeads: z.number().int().min(1).max(1000).optional(),
+  windowStart: z.string().regex(/^([01]\d|2[0-4]):[0-5]\d$/, 'Use HH:mm').nullish(),
+  windowEnd: z.string().regex(/^([01]\d|2[0-4]):[0-5]\d$/, 'Use HH:mm').nullish(),
+  sendDays: z.string().regex(/^[1-7](,[1-7])*$/, 'Pick at least one day').nullish(),
+  gapMinMinutes: z.number().int().min(1).max(240).nullish(),
+  gapMaxMinutes: z.number().int().min(1).max(240).nullish(),
   senderAccountIds: z.array(z.string()).optional(),
 })
 

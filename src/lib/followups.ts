@@ -7,6 +7,7 @@ import { STOP_FOLLOWUP_STATUSES } from './utils'
 import { deliverEmail, assertSendable, scheduleFollowUps, OutreachError, type EmailKind } from './outreach'
 import { hasReplied, flagDisconnected } from './replies'
 import { getSettings } from './settings'
+import { campaignSchedule } from './schedule'
 import type { LeadStatus } from '@/types'
 
 const SENT_STATUS: Record<string, string> = {
@@ -76,7 +77,7 @@ export async function sendScheduledEmailTask(
           senderAccountId: sender.id,
           base: new Date(),
           plan: days.map((delayDays, i) => ({ step: i + 1, delayDays })),
-          window: settings.sendWindow,
+          window: campaignSchedule(campaign, settings).window,
         })
       }
     }

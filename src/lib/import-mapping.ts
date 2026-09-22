@@ -60,6 +60,8 @@ const RULES: Array<[RegExp, ImportField | '']> = [
   [/(size|employees|headcount)/, 'companySize'],
   [/priority|tier/, 'priority'],
   [/(personal|icebreaker|opener|hook)/, 'personalizationNotes'],
+  [/(hours|openinghours|businesshours|officehours|timings?)/, 'whyThisLead'],
+  [/(reviews?|rating|awards?)/, 'whyThisLead'],
   [/(why|intent|research|signal|reason)/, 'whyThisLead'],
   [/pain/, 'companyPainPoint'],
   [/(facebook|instagram|twitter|tiktok|social)/, 'socialMediaNotes'],

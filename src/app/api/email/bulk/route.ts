@@ -3,7 +3,7 @@ import { z } from 'zod'
 import { requireAuth } from '@/lib/auth'
 import prisma from '@/lib/prisma'
 import { getSettings } from '@/lib/settings'
-import { nextWindowSlot } from '@/lib/send-window'
+import { staggeredSlots, type SendWindow } from '@/lib/send-window'
 import { pickDefaultTemplate } from '@/lib/template'
 import { dailyAllowance } from '@/lib/outreach'
 import { refreshNextFollowUp } from '@/lib/followups'
@@ -15,8 +15,16 @@ const bulkSchema = z.object({
   templateId: z.string().optional(),
   // Inboxes to rotate across (default: every connected inbox)
   senderAccountIds: z.array(z.string()).optional(),
-  // 'now' = start right away, 'window' = start in the next send window, ISO = start then
-  start: z.union([z.enum(['now', 'window']), z.string().datetime({ offset: true })]).default('window'),
+  // 'now' = start now (or when the window opens), ISO = start from that moment
+  start: z.union([z.enum(['now', 'window']), z.string().datetime({ offset: true })]).default('now'),
+  // Pacing, Instantly-style. Omit to use Settings.
+  schedule: z.object({
+    windowStart: z.string().regex(/^([01]\d|2[0-4]):[0-5]\d$/),
+    windowEnd: z.string().regex(/^([01]\d|2[0-4]):[0-5]\d$/),
+    days: z.array(z.number().int().min(1).max(7)).min(1, 'Pick at least one sending day'),
+    gapMin: z.number().min(0.5).max(240),
+    gapMax: z.number().min(0.5).max(240),
+  }).optional(),
 })
 
 /**
@@ -41,9 +49,12 @@ export async function POST(req: NextRequest) {
   const chosen = input.templateId ? templates.find((t) => t.id === input.templateId) : undefined
   if (input.templateId && !chosen) return NextResponse.json({ error: 'Template not found' }, { status: 404 })
 
-  const startAt = input.start === 'now' ? new Date()
-    : input.start === 'window' ? nextWindowSlot(new Date(), settings.sendWindow, 0)
-    : new Date(input.start)
+  const from = input.start === 'now' || input.start === 'window' ? new Date() : new Date(input.start)
+  const window: SendWindow = input.schedule
+    ? { ...settings.sendWindow, start: input.schedule.windowStart, end: input.schedule.windowEnd, days: input.schedule.days }
+    : settings.sendWindow
+  const gapMin = input.schedule?.gapMin ?? 3
+  const gapMax = Math.max(gapMin, input.schedule?.gapMax ?? 5)
 
   const leads = await prisma.lead.findMany({
     where: { id: { in: input.leadIds } },
@@ -63,6 +74,12 @@ export async function POST(req: NextRequest) {
   let queued = 0
   let turn = 0
 
+  // One send time per lead: window-bound, gapMin–gapMax minutes apart, inboxes taking turns,
+  // and no more per window than the inboxes are allowed to send in a day
+  const capacity = allowances.reduce((n, x) => n + x.a.limit, 0)
+  const slots = staggeredSlots(leads.length, from, window, gapMin, gapMax, Math.max(1, capacity))
+  let slot = 0
+
   for (const lead of leads) {
     const email = lead.companyEmail?.toLowerCase()
     if (!email) { skip('No email address'); continue }
@@ -74,14 +91,14 @@ export async function POST(req: NextRequest) {
     const template = chosen ?? pickDefaultTemplate(templates, 'FIRST_EMAIL', lead.campaignId)
     if (!template) { skip('No first-email template for its niche'); continue }
 
-    // Keep an existing inbox assignment if it's in the rotation, otherwise take the next inbox
-    const sender = rotation.find((s) => s.id === lead.senderAccountId) ?? rotation[turn++ % rotation.length]
+    // Strict rotation: each email goes out from the next inbox in turn
+    const sender = rotation[turn++ % rotation.length]
     await prisma.followUpTask.create({
       data: {
         leadId: lead.id,
         senderAccountId: sender.id,
         type: 'FIRST_EMAIL',
-        scheduledAt: startAt,
+        scheduledAt: slots[slot++] ?? slots[slots.length - 1] ?? from,
         // Raw template: variables are filled in per lead at the moment it sends
         subject: template.subject,
         body: template.body,
@@ -92,11 +109,13 @@ export async function POST(req: NextRequest) {
     queued++
   }
 
+  const used = slots.slice(0, queued)
   const perDay = allowances.reduce((n, x) => n + x.a.limit, 0)
   return NextResponse.json({
     queued,
     skipped,
-    startAt: startAt.toISOString(),
+    startAt: used[0]?.toISOString() ?? null,
+    lastAt: used[used.length - 1]?.toISOString() ?? null,
     inboxes: rotation.length,
     perDay,
     estimatedDays: perDay ? Math.ceil(queued / perDay) : null,

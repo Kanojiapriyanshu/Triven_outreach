@@ -3,7 +3,7 @@ import { useState } from 'react'
 import Link from 'next/link'
 import useSWR from 'swr'
 import { toast } from 'sonner'
-import { Plus, Megaphone, Trash2, Pause, Play, Rocket, Settings2, Upload, Inbox } from 'lucide-react'
+import { Plus, Megaphone, Trash2, Pause, Play, Rocket, Settings2, Upload, Inbox, Clock } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -12,7 +12,8 @@ import { Label } from '@/components/ui/label'
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription,
 } from '@/components/ui/dialog'
-import { describeWindow, DEFAULT_SEND_WINDOW, type SendWindow } from '@/lib/send-window'
+import { describeWindow, describeDays, windowMinutes, DAY_LABELS, DEFAULT_SEND_WINDOW, type SendWindow } from '@/lib/send-window'
+import { campaignSchedule, emailsPerWindow, parseDays } from '@/lib/schedule'
 
 const fetcher = (url: string) => fetch(url).then((r) => r.json())
 
@@ -21,6 +22,8 @@ interface Campaign {
   id: string; name: string; industry: string
   sendingStatus: 'DRAFT' | 'ACTIVE' | 'PAUSED'
   dailyNewLeads: number; launchedAt?: string | null
+  windowStart?: string | null; windowEnd?: string | null; sendDays?: string | null
+  gapMinMinutes?: number | null; gapMaxMinutes?: number | null
   followUpDay1: number; followUpDay2: number; followUpDay3: number
   _count: { leads: number; templates: number }
   senderAccounts: Array<{ senderAccount: { id: string; displayName: string; email: string; gmailStatus: string } }>
@@ -34,7 +37,11 @@ const STATUS = {
   PAUSED: { label: 'Paused',  variant: 'warning' as const },
 }
 
-const EMPTY = { name: '', industry: '', dailyNewLeads: 30, followUpDay1: 3, followUpDay2: 7, followUpDay3: 14, senderAccountIds: [] as string[] }
+const EMPTY = {
+  name: '', industry: '', dailyNewLeads: 30, followUpDay1: 3, followUpDay2: 7, followUpDay3: 14, senderAccountIds: [] as string[],
+  // Schedule ('' = use Settings)
+  windowStart: '', windowEnd: '', sendDays: [1, 2, 3, 4, 5] as number[], gapMinMinutes: 3, gapMaxMinutes: 5,
+}
 
 function pct(n: number, d: number) {
   return d ? `${Math.round((n / d) * 100)}%` : '–'
@@ -65,6 +72,9 @@ export default function CampaignsPage() {
       name: c.name, industry: c.industry, dailyNewLeads: c.dailyNewLeads,
       followUpDay1: c.followUpDay1, followUpDay2: c.followUpDay2, followUpDay3: c.followUpDay3,
       senderAccountIds: c.senderAccounts.map((s) => s.senderAccount.id),
+      windowStart: c.windowStart ?? '', windowEnd: c.windowEnd ?? '',
+      sendDays: parseDays(c.sendDays) ?? [1, 2, 3, 4, 5],
+      gapMinMinutes: c.gapMinMinutes ?? 3, gapMaxMinutes: c.gapMaxMinutes ?? 5,
     })
     setShowForm(true)
   }
@@ -83,7 +93,14 @@ export default function CampaignsPage() {
       const res = await fetch(editing ? `/api/campaigns/${editing.id}` : '/api/campaigns', {
         method: editing ? 'PATCH' : 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...form, industry: form.industry.trim() || form.name.trim() }),
+        body: JSON.stringify({
+          ...form,
+          industry: form.industry.trim() || form.name.trim(),
+          windowStart: form.windowStart || null,
+          windowEnd: form.windowEnd || null,
+          sendDays: form.sendDays.length ? [...form.sendDays].sort().join(',') : null,
+          gapMaxMinutes: Math.max(form.gapMinMinutes, form.gapMaxMinutes),
+        }),
       })
       const d = await res.json().catch(() => ({}))
       if (!res.ok) return toast.error(d.error || 'Could not save')
@@ -118,6 +135,12 @@ export default function CampaignsPage() {
   }
 
   const w = settings?.sendWindow ?? DEFAULT_SEND_WINDOW
+  const global = { sendWindow: w, minGapMinutes: settings?.minGapMinutes ?? 8, maxGapMinutes: settings?.maxGapMinutes ?? 15 }
+  const formSchedule = campaignSchedule({
+    windowStart: form.windowStart || null, windowEnd: form.windowEnd || null,
+    sendDays: form.sendDays.join(','), gapMinMinutes: form.gapMinMinutes, gapMaxMinutes: form.gapMaxMinutes,
+  }, global)
+  const formInboxes = form.senderAccountIds.length || senders.filter((s) => s.gmailStatus === 'CONNECTED').length
 
   return (
     <div className="space-y-5 max-w-6xl">
@@ -125,8 +148,8 @@ export default function CampaignsPage() {
         <div>
           <h1 className="text-xl font-bold text-slate-900">Campaigns</h1>
           <p className="text-sm text-slate-500">
-            Import leads into a campaign and launch it. Emails go out automatically, rotating across your inboxes,
-            weekdays {describeWindow(w)}, {settings?.minGapMinutes ?? 8}–{settings?.maxGapMinutes ?? 15} min apart per inbox.
+            Import leads into a campaign and launch it. Emails go out automatically, one at a time, switching inboxes each time,
+            on each campaign&apos;s own schedule.
           </p>
         </div>
         <Button size="sm" onClick={openNew}><Plus className="h-4 w-4" />New Campaign</Button>
@@ -150,6 +173,7 @@ export default function CampaignsPage() {
           const liveInboxes = inboxes.filter((x) => x.gmailStatus === 'CONNECTED').length
           const daysLeft = s.queued ? Math.ceil(s.queued / Math.max(1, c.dailyNewLeads)) : 0
           const st = STATUS[c.sendingStatus] ?? STATUS.DRAFT
+          const sched = campaignSchedule(c, global)
           return (
             <Card key={c.id}>
               <CardContent className="p-5">
@@ -164,7 +188,9 @@ export default function CampaignsPage() {
                       <Badge variant="secondary" className="text-xs">{c.industry}</Badge>
                     </div>
                     <p className="text-xs text-slate-500 mt-1">
-                      {liveInboxes} inbox{liveInboxes === 1 ? '' : 'es'} rotating · up to {c.dailyNewLeads} new leads/day ·
+                      <Clock className="inline h-3 w-3 mr-0.5 -mt-0.5" />{describeDays(sched.window)} {describeWindow(sched.window)} ·
+                      {sched.gap ? ` one email every ${sched.gap.min}–${sched.gap.max} min, switching inboxes ·` : ''}
+                      {' '}{liveInboxes} inbox{liveInboxes === 1 ? '' : 'es'} rotating · up to {c.dailyNewLeads} new leads/day ·
                       follow-ups on day {c.followUpDay1}, {c.followUpDay2}, {c.followUpDay3}
                       {c.sendingStatus === 'ACTIVE' && s.queued > 0 && <> · queue done in ~{daysLeft} working day{daysLeft === 1 ? '' : 's'}</>}
                     </p>
@@ -245,6 +271,48 @@ export default function CampaignsPage() {
                   <Input key={k} type="number" min={1} value={form[k]} onChange={(e) => setForm((f) => ({ ...f, [k]: Math.max(1, Number(e.target.value) || 1) }))} className="w-20" />
                 ))}
               </div>
+            </div>
+            <div className="rounded-xl border border-slate-200 p-3 space-y-3">
+              <p className="text-sm font-semibold text-slate-800 flex items-center gap-1.5"><Clock className="h-4 w-4 text-indigo-600" />Schedule</p>
+              <div className="flex flex-wrap items-center gap-2 text-sm text-slate-600">
+                Send between
+                <Input type="time" value={form.windowStart || w.start} onChange={(e) => setForm((f) => ({ ...f, windowStart: e.target.value }))} className="w-28 h-8" />
+                and
+                <Input
+                  type="time"
+                  value={(form.windowEnd || w.end) === '24:00' ? '00:00' : (form.windowEnd || w.end)}
+                  onChange={(e) => setForm((f) => ({ ...f, windowEnd: e.target.value === '00:00' ? '24:00' : e.target.value }))}
+                  className="w-28 h-8"
+                />
+                <span className="text-xs text-slate-400">({w.timezone.replace('_', ' ')}{windowMinutes(formSchedule.window) > 0 ? `, ${Math.round(windowMinutes(formSchedule.window) / 6) / 10} h` : ''})</span>
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {DAY_LABELS.map((d, i) => {
+                  const day = i + 1
+                  const on = form.sendDays.includes(day)
+                  return (
+                    <button
+                      key={d}
+                      type="button"
+                      onClick={() => setForm((f) => ({ ...f, sendDays: on ? f.sendDays.filter((x) => x !== day) : [...f.sendDays, day] }))}
+                      className={`w-11 py-1 rounded-md text-xs font-medium border ${on ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-slate-500 border-slate-300'}`}
+                    >
+                      {d}
+                    </button>
+                  )
+                })}
+              </div>
+              <div className="flex flex-wrap items-center gap-2 text-sm text-slate-600">
+                Gap between emails
+                <Input type="number" min={1} value={form.gapMinMinutes} onChange={(e) => setForm((f) => ({ ...f, gapMinMinutes: Math.max(1, Number(e.target.value) || 1) }))} className="w-16 h-8" />
+                to
+                <Input type="number" min={1} value={form.gapMaxMinutes} onChange={(e) => setForm((f) => ({ ...f, gapMaxMinutes: Math.max(1, Number(e.target.value) || 1) }))} className="w-16 h-8" />
+                min
+              </div>
+              <p className="text-xs text-slate-500">
+                One email, then switch to the next inbox, then wait {form.gapMinMinutes}–{Math.max(form.gapMinMinutes, form.gapMaxMinutes)} min (random), and so on.
+                About <strong>{emailsPerWindow(formSchedule, formInboxes, { min: global.minGapMinutes, max: global.maxGapMinutes })}</strong> emails fit in each window with {formInboxes} inbox{formInboxes === 1 ? '' : 'es'}.
+              </p>
             </div>
             <div>
               <Label>Inboxes to rotate</Label>

@@ -4,7 +4,7 @@ import useSWR from 'swr'
 import { toast } from 'sonner'
 import {
   Upload, FileText, CheckCircle, AlertCircle, ArrowRight,
-  AlertTriangle, RefreshCw, X,
+  AlertTriangle, RefreshCw, X, Download,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -36,6 +36,7 @@ export default function ImportsPage() {
   const [campaignId, setCampaignId] = useState('')
   const [senderChoice, setSenderChoice] = useState('rotate')
   const [importedCount, setImportedCount] = useState(0)
+  const [launchAfter, setLaunchAfter] = useState(true)
   const importedCampaign = (Array.isArray(campaigns) ? campaigns : []).find((c: { id: string }) => c.id === campaignId) as { name: string; sendingStatus: string } | undefined
   const dupFields = duplicateTargets(columnMapping)
   const [importing, setImporting] = useState(false)
@@ -91,11 +92,13 @@ export default function ImportsPage() {
           duplicateAction,
           campaignId: campaignId || undefined,
           senderAccountId: senderChoice === 'none' ? undefined : senderChoice,
+          launch: !!campaignId && launchAfter,
         }),
       })
       const data = await res.json()
       if (!res.ok) return toast.error(data.error)
-      toast.success(`Imported ${data.importedRows} leads`)
+      toast.success(`Imported ${data.importedRows} leads${data.launched ? ' · campaign is sending' : ''}`)
+      if (data.launchError) toast.error(data.launchError)
       setImportedCount(data.importedRows)
       setStep('done')
       mutate()
@@ -150,6 +153,22 @@ export default function ImportsPage() {
               </Button>
             </div>
             <input ref={fileRef} type="file" accept=".csv,.xlsx,.xls" className="hidden" onChange={handleFileUpload} />
+
+            <div className="mt-6 grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="rounded-xl border border-slate-200 p-4">
+                <p className="text-sm font-semibold text-slate-800">Lead sheet template</p>
+                <p className="text-xs text-slate-500 mt-1">The exact columns this system reads, plus a guide tab explaining each one. Collect your data in this format.</p>
+                <div className="flex gap-2 mt-3">
+                  <Button size="sm" variant="outline" asChild><a href="/import/Triven_Lead_Import_Template.xlsx" download><Download className="h-3.5 w-3.5" />Excel</a></Button>
+                  <Button size="sm" variant="ghost" asChild><a href="/import/Triven_Lead_Import_Template.csv" download>CSV</a></Button>
+                </div>
+              </div>
+              <div className="rounded-xl border border-slate-200 p-4">
+                <p className="text-sm font-semibold text-slate-800">Demo sheet (for testing)</p>
+                <p className="text-xs text-slate-500 mt-1">10 sample clinics that all deliver to your own Gmail (using +aliases), each testing a different case.</p>
+                <Button size="sm" variant="outline" className="mt-3" asChild><a href="/import/Triven_Demo_Leads.xlsx" download><Download className="h-3.5 w-3.5" />Demo sheet</a></Button>
+              </div>
+            </div>
           </CardContent>
         </Card>
       )}
@@ -283,7 +302,13 @@ export default function ImportsPage() {
                       ))}
                     </SelectContent>
                   </Select>
-                  <p className="text-xs text-slate-400 mt-1">Leads use this niche&apos;s email templates.</p>
+                  <p className="text-xs text-slate-400 mt-1">Leads use this niche&apos;s email templates and its schedule.</p>
+                  {campaignId && (
+                    <label className="flex items-center gap-2 mt-2 text-sm text-slate-700 cursor-pointer">
+                      <input type="checkbox" checked={launchAfter} onChange={(e) => setLaunchAfter(e.target.checked)} className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500" />
+                      Start sending right after import
+                    </label>
+                  )}
                 </div>
                 <div>
                   <p className="text-xs font-medium text-slate-500 mb-1">Send from</p>

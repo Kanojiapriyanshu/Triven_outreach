@@ -28,7 +28,7 @@ export const SEQUENCE_LIBRARY: LibrarySequence[] = [
       {
         type: 'FIRST_EMAIL',
         name: 'Dental: the gap in your hours',
-        subject: '{{#if companyName}}{{{companyName}} after {{closingTime|hours}}|missed calls at {{companyName}}|{{companyName}}\'s phones after {{closingTime|5pm}}}{{else}}{{{#if closingTime}}calls after {{closingTime}}{{else}}after-hours patient calls{{/if}}|missed patient calls}{{/if}}',
+        subject: '{{#if companyName}}{{{companyName}} after {{closingTime|hours}}|missed calls at {{companyName}}|calls to {{companyName}} after {{closingTime|hours}}}{{else}}{{{#if closingTime}}calls after {{closingTime}}{{else}}after-hours patient calls{{/if}}|missed patient calls}{{/if}}',
         body: `{Hi|Hello} {{name}},
 
 {{hook}}

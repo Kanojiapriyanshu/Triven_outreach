@@ -12,6 +12,8 @@ const processSchema = z.object({
   campaignId: z.string().optional(),
   // A sender id, or "rotate" to spread leads across connected Gmail accounts
   senderAccountId: z.string().optional(),
+  // Switch the campaign on once the leads are in
+  launch: z.boolean().optional(),
 })
 
 function parseDate(v?: string) {
@@ -29,7 +31,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   const { id } = await params
   const parsed = processSchema.safeParse(await req.json().catch(() => ({})))
   if (!parsed.success) return NextResponse.json({ error: 'Invalid import options' }, { status: 400 })
-  const { duplicateAction, campaignId, senderAccountId } = parsed.data
+  const { duplicateAction, campaignId, senderAccountId, launch } = parsed.data
 
   const importRecord = await prisma.import.findUnique({ where: { id } })
   if (!importRecord) return NextResponse.json({ error: 'Not found' }, { status: 404 })
@@ -119,5 +121,19 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   const importedRows = toCreate.length + updated
   await prisma.import.update({ where: { id }, data: { status: 'COMPLETED', importedRows } })
 
-  return NextResponse.json({ ok: true, importedRows, created: toCreate.length, updated })
+  // Optionally launch the campaign (same checks as the Launch button)
+  let launched = false
+  let launchError: string | undefined
+  if (launch && campaign && campaign.sendingStatus !== 'ACTIVE') {
+    const template = await prisma.emailTemplate.findFirst({ where: { type: 'FIRST_EMAIL', OR: [{ campaignId: campaign.id }, { campaignId: null }] } })
+    const connected = await prisma.senderAccount.count({ where: { gmailStatus: 'CONNECTED', isActive: true } })
+    if (!template) launchError = 'Imported, but not launched: add a first-email template first.'
+    else if (!connected) launchError = 'Imported, but not launched: no Gmail inbox is connected.'
+    else {
+      await prisma.campaign.update({ where: { id: campaign.id }, data: { sendingStatus: 'ACTIVE', launchedAt: campaign.launchedAt ?? new Date() } })
+      launched = true
+    }
+  } else if (launch && campaign?.sendingStatus === 'ACTIVE') launched = true
+
+  return NextResponse.json({ ok: true, importedRows, created: toCreate.length, updated, launched, launchError })
 }
