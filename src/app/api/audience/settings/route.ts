@@ -21,6 +21,7 @@ const schema = z.object({
   useWebSearch: z.boolean(),
   useFinders: z.boolean(),
   hunterReserve: z.number().int().min(0).max(100000),
+  hunterSmartVerify: z.boolean().default(true),
 })
 
 export async function GET() {

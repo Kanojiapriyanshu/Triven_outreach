@@ -19,6 +19,7 @@ import { discover, hostOf, patternGuesses, SHARED_HOSTS, crawlWebsite, type Find
 import { resolveIdentity, searchProvider } from './identity'
 import { findBusinessEmail, finderProviders } from './finders'
 import { hunterAccount, hunterConfigured, hunterEnrich, HunterLimitError } from './hunter'
+import { verifyWithHunter } from './verify'
 import { emailTraits, verifierProvider, verifyEmail, FREE_MAIL } from './verify'
 import { aiConfigured, reviewProspects, describeAiError } from './ai'
 import { CONSENT_SENSITIVE, regionOf } from './taxonomy'
@@ -237,6 +238,11 @@ export async function refreshProspects(ids: string[]) {
       ownChannelSummary: p.ownChannelSummary,
       hasWebsite: !!p.website,
     })
+    // Names from auto-suffixed handles ("@BrandonWu-z5i") for people collected before that was understood
+    if (!p.firstName) {
+      const nm = parseName(p.displayName)
+      if (nm.firstName) { p.firstName = nm.firstName; p.lastName = nm.lastName || null }
+    }
     const identity = computeIdentity(p)
     const place = inferCountry({
       existing: { country: p.country, source: p.countrySource, confidence: p.countryConfidence },
@@ -252,6 +258,7 @@ export async function refreshProspects(ids: string[]) {
     const data: Prisma.ProspectUpdateInput = {
       commentCount: list.length, lastSeenAt: new Date(), bestCommentId: best.id,
       intentScore: intent, intentEvidence: evidence, identityScore: identity, score: intent,
+      firstName: p.firstName, lastName: p.lastName,
       ...(place && (place.country !== p.country || place.confidence !== p.countryConfidence) ? {
         country: place.country, countrySource: place.source, countryConfidence: place.confidence,
         region: regionOf(place.country), consentSensitive: CONSENT_SENSITIVE.has(place.country),
@@ -672,8 +679,27 @@ async function saveEmails(prospectId: string, emails: Findings['emails']) {
 // ─── Re-score ────────────────────────────────────────────────────────────────
 
 /** People collected before intent scoring existed get scored the first time the pipeline runs */
+const SCORING_VERSION = '2' // bump when intent scoring changes: everyone is re-scored on the next runs
+
 export async function rescoreLegacy(deadline: number) {
   let n = 0
+  const v = await prisma.setting.findUnique({ where: { key: 'audience_scoring_version' } })
+  if (v?.value !== SCORING_VERSION) {
+    // Queue everyone (not hand-rated ones) for the re-score sweep below
+    await prisma.prospect.updateMany({ where: { aiCheckedAt: null, commentCount: { gt: 0 } }, data: { intentScore: 0, intentEvidence: [] } })
+    await prisma.setting.upsert({ where: { key: 'audience_scoring_version' }, create: { key: 'audience_scoring_version', value: SCORING_VERSION }, update: { value: SCORING_VERSION } })
+  }
+  // Relevant people whose name hid in an auto-suffixed handle get the name, and another identity search
+  const unnamed = await prisma.prospect.findMany({
+    where: { firstName: null, relevance: { in: ['HIGH', 'MEDIUM'] }, platform: 'YOUTUBE' },
+    select: { id: true, displayName: true }, take: 300,
+  })
+  for (const p of unnamed) {
+    const nm = parseName(p.displayName)
+    if (!nm.firstName || !nm.lastName) continue
+    await prisma.prospect.update({ where: { id: p.id }, data: { firstName: nm.firstName, lastName: nm.lastName, webSearchedAt: null, finderCheckedAt: null } })
+    n++
+  }
   while (left(deadline) > 5_000) {
     const ids = (await prisma.prospect.findMany({
       where: { intentScore: 0, intentEvidence: { isEmpty: true }, commentCount: { gt: 0 } },
@@ -783,6 +809,80 @@ export function readinessGap(p: SendableProspect & { identityScore: number; emai
   return null
 }
 
+/** Stable key for a readiness gap, for the "what's blocking outreach" breakdown */
+export function gapCode(gap: string) {
+  if (gap.startsWith('Intent')) return 'INTENT'
+  if (gap.startsWith('Identity')) return 'IDENTITY'
+  if (gap.startsWith('No email found')) return 'NO_EMAIL'
+  if (gap.startsWith('Only a personal')) return 'PERSONAL_ONLY'
+  if (gap.startsWith('Email not verified')) return 'UNVERIFIED'
+  return 'COUNTRY'
+}
+
+// ─── Smart verification ──────────────────────────────────────────────────────
+// No paid verifier? Spend Hunter's free credits only where they flip someone to READY:
+// an address is checked only if verification is the one thing still missing.
+
+export async function smartVerify(deadline: number, settings: AudienceSettings) {
+  const out = { checked: 0, verified: 0, skippedCredits: false }
+  if (verifierProvider() || !hunterConfigured() || !settings.hunterSmartVerify) return out
+  let credits = 0
+  try { credits = (await hunterAccount())?.remaining ?? 0 } catch { return out }
+  const candidates = await prisma.prospectEmail.findMany({
+    where: {
+      status: 'UNKNOWN', verifyMethod: 'MX',
+      prospect: { relevance: { in: outreachRelevance(settings) }, status: { notIn: ['DO_NOT_CONTACT', 'IN_CAMPAIGN', 'READY_TO_CONTACT'] } },
+    },
+    include: { prospect: { include: { emails: true } } },
+    orderBy: [{ isFree: 'asc' }, { prospect: { intentScore: 'desc' } }],
+    take: 30,
+  })
+  const done = new Set<string>()
+  for (const e of candidates) {
+    if (left(deadline) < 5_000) break
+    if (done.has(e.prospectId)) continue
+    if (credits - 0.5 < settings.hunterReserve) { out.skippedCredits = true; break }
+    const p = e.prospect
+    const hypothetical = { ...p, emails: p.emails.map((x) => (x.id === e.id ? { ...x, status: 'VERIFIED' } : x)) }
+    if (readinessGap(hypothetical, settings)) continue // verifying wouldn't make them ready: save the credit
+    const v = await verifyWithHunter(e.email)
+    credits -= 0.5
+    out.checked++
+    if (v.status === 'VERIFIED') { out.verified++; done.add(e.prospectId) }
+    await prisma.prospectEmail.update({
+      where: { id: e.id },
+      data: { status: v.status, verifyMethod: v.method, verifyDetail: v.detail.slice(0, 250), checkedAt: new Date() },
+    })
+    await updateStatus(e.prospectId, settings)
+  }
+  return out
+}
+
+/** Why the relevant people aren't ready yet, grouped (drives the overview's blockers panel) */
+export async function readinessBreakdown() {
+  const s = await getAudienceSettings()
+  const people = await prisma.prospect.findMany({
+    where: { relevance: { in: ['HIGH', 'MEDIUM'] }, status: { notIn: ['DO_NOT_CONTACT', 'IN_CAMPAIGN'] } },
+    select: { relevance: true, identityScore: true, consentSensitive: true, country: true, enrichedAt: true, emails: { select: { status: true, source: true, verifyMethod: true, isFree: true } } },
+    take: 5000,
+  })
+  const counts: Record<string, number> = {}
+  let ready = 0, notResearched = 0
+  // What would change if the user relaxed each rule (the "one-click fixes")
+  const whatIf = { mediumIntent: 0, publishedEmails: 0, both: 0 }
+  for (const p of people) {
+    if (!p.enrichedAt) { notResearched++; continue }
+    const gap = readinessGap(p, s)
+    if (!gap) { ready++; continue }
+    const code = gapCode(gap)
+    counts[code] = (counts[code] || 0) + 1
+    if (s.outreachFrom === 'HIGH' && !readinessGap(p, { ...s, outreachFrom: 'MEDIUM' })) whatIf.mediumIntent++
+    if (s.sendPolicy === 'VERIFIED_ONLY' && !readinessGap(p, { ...s, sendPolicy: 'VERIFIED_OR_PUBLISHED' })) whatIf.publishedEmails++
+    if (s.sendPolicy === 'VERIFIED_ONLY' && s.outreachFrom === 'HIGH' && !readinessGap(p, { ...s, sendPolicy: 'VERIFIED_OR_PUBLISHED', outreachFrom: 'MEDIUM' })) whatIf.both++
+  }
+  return { relevant: people.length, ready, notResearched, blockers: counts, whatIf, rules: { outreachFrom: s.outreachFrom, sendPolicy: s.sendPolicy, businessEmailsOnly: s.businessEmailsOnly, minIdentity: s.minIdentity } }
+}
+
 export async function updateStatus(prospectId: string, settings?: AudienceSettings) {
   const s = settings || await getAudienceSettings()
   const p = await prisma.prospect.findUnique({ where: { id: prospectId }, include: { emails: true, lead: { select: { id: true } } } })
@@ -848,7 +948,10 @@ export async function runAudiencePipeline(deadline: number, only?: PipelineStep)
   if (!only || only === 'enrich') result.enrich = await enrichProspects(only ? deadline : share(0.5), settings)
   if (!only || only === 'identity') result.identity = await identityStep(only ? deadline : share(0.5), settings)
   if (!only || only === 'finder') result.finder = await finderStep(only ? deadline : share(0.6), settings)
-  if (!only || only === 'verify') result.verify = await verifyPending(deadline)
+  if (!only || only === 'verify') {
+    result.verify = await verifyPending(Math.min(deadline, Date.now() + (deadline - Date.now()) * 0.7))
+    result.smartVerify = await smartVerify(deadline, settings)
+  }
 
   if (!only) {
     const last = await prisma.setting.findUnique({ where: { key: PURGE_KEY } })

@@ -28,6 +28,7 @@ interface Overview {
   config: { youtube: boolean; ai: boolean; verifier: string | null; search: string | null; finders: string[] }
   quota: { used: number; limit: number; left: number }
   hunter: { plan: string; remaining: number; available: number; resetDate: string | null } | null
+  readiness: Readiness
   backlog: { videos: number; review: number; enrich: number; identity: number; finder: number; verify: number; total: number }
   funnel: Record<string, number>
   quality: { relevantPct: number | null; profilePct: number | null; emailFoundPct: number | null; verifiedPct: number | null; repeatMerged: number; invalidEmailPct: number | null; emailsTotal: number; dnc: number }
@@ -40,6 +41,13 @@ interface Overview {
   byPlatform: Array<{ key: string; count: number }>
   sources: Array<{ id: string; title: string; handle: string | null; thumbnailUrl: string | null; subscriberCount: number; videos: number; comments: number; prospects: number; relevant: number; withEmail: number; verified: number; contacted: number; replied: number; interested: number; meetings: number }>
 }
+interface Readiness {
+  relevant: number; ready: number; notResearched: number
+  blockers: Record<string, number>
+  whatIf: { mediumIntent: number; publishedEmails: number; both: number }
+  rules: { outreachFrom: 'HIGH' | 'MEDIUM'; sendPolicy: 'VERIFIED_ONLY' | 'VERIFIED_OR_PUBLISHED'; businessEmailsOnly: boolean; minIdentity: number }
+}
+
 interface PresetCampaign { key: string; name: string; personas: string[]; id: string | null; sendingStatus: string | null; leads: number; templates: number }
 
 const FUNNEL: Array<{ key: string; label: string; hint?: string }> = [
@@ -69,6 +77,20 @@ export default function AudienceOverviewPage() {
   const { data: outreach } = useSWR<{ builderUrl?: string; senderAddress?: string }>('/api/settings', fetcher)
   const [showSettings, setShowSettings] = useState(false)
   const [creating, setCreating] = useState(false)
+  const [fixing, setFixing] = useState<string | null>(null)
+
+  /** One-click rule changes from the blockers panel */
+  async function applyFix(change: Partial<AudienceSettings>, key: string) {
+    setFixing(key)
+    try {
+      const current = await fetch('/api/audience/settings').then((r) => r.json())
+      const res = await fetch('/api/audience/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...current, ...change }) })
+      const d = await res.json()
+      if (!res.ok) return toast.error(d.error || 'Could not update the rules')
+      toast.success(`Rules updated. ${d.reevaluated} people re-checked.`)
+      mutate()
+    } finally { setFixing(null) }
+  }
 
   const f = data?.funnel || {}
   const top = Math.max(1, f.comments || 0)
@@ -131,6 +153,10 @@ export default function AudienceOverviewPage() {
           )}
         </CardContent>
       </Card>
+
+      {data?.readiness && data.readiness.relevant > 0 && (
+        <Blockers r={data.readiness} hunter={!!data.hunter} onFix={applyFix} fixing={fixing} />
+      )}
 
       {data && setup.some((s) => !s.ok && s.need) && (
         <Card>
@@ -459,5 +485,86 @@ function SettingsDialog({ open, onOpenChange, onSaved }: { open: boolean; onOpen
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  )
+}
+
+const BLOCKER_TEXT: Record<string, { title: string; body: string }> = {
+  NO_EMAIL: { title: 'No email found yet', body: 'Research found no public address. High-intent people get a web search and Hunter lookup automatically; the rest need a site, LinkedIn or company first.' },
+  IDENTITY: { title: "Don't know who they are yet", body: 'No confirmed website, LinkedIn or company, so we can\'t be sure whose inbox an address is.' },
+  INTENT: { title: 'Medium intent (outreach is set to high only)', body: 'They engage, but without a strong signal like running a business, clients or building something.' },
+  UNVERIFIED: { title: 'Email found, not verified', body: 'The address exists and its domain receives mail, but the mailbox itself hasn\'t been confirmed.' },
+  PERSONAL_ONLY: { title: 'Only a personal address', body: 'A gmail-type address that the business-email rule blocks.' },
+  COUNTRY: { title: 'Blocked by country rules', body: 'Stricter rules for EU/UK/CA/AU/NZ, or outside your chosen countries.' },
+}
+
+function Blockers({ r, hunter, onFix, fixing }: { r: Readiness; hunter: boolean; onFix: (c: Partial<AudienceSettings>, key: string) => void; fixing: string | null }) {
+  const rows = Object.entries(r.blockers).sort((a, b) => b[1] - a[1])
+  const fixes = [
+    r.whatIf.publishedEmails > 0 && {
+      key: 'published', count: r.whatIf.publishedEmails,
+      label: 'Accept business emails people published themselves',
+      hint: 'Addresses from their own website, bio or video descriptions, on a domain that receives mail. Free; slightly more bounce risk than verified.',
+      change: { sendPolicy: 'VERIFIED_OR_PUBLISHED' as const },
+    },
+    r.whatIf.mediumIntent > 0 && {
+      key: 'medium', count: r.whatIf.mediumIntent,
+      label: 'Also email medium-intent people',
+      hint: 'Engaged commenters without a strong buying signal.',
+      change: { outreachFrom: 'MEDIUM' as const },
+    },
+    r.whatIf.both > Math.max(r.whatIf.publishedEmails, r.whatIf.mediumIntent) && {
+      key: 'both', count: r.whatIf.both,
+      label: 'Both of the above',
+      hint: 'Published business emails and medium intent.',
+      change: { sendPolicy: 'VERIFIED_OR_PUBLISHED' as const, outreachFrom: 'MEDIUM' as const },
+    },
+  ].filter(Boolean) as Array<{ key: string; count: number; label: string; hint: string; change: Partial<AudienceSettings> }>
+
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <CardTitle>What&apos;s blocking outreach</CardTitle>
+        <CardDescription>
+          {r.ready.toLocaleString('en-US')} of {r.relevant.toLocaleString('en-US')} relevant people are ready to email
+          {r.notResearched ? ` · ${r.notResearched.toLocaleString('en-US')} still being researched` : ''}.
+          {' '}Rules now: {r.rules.outreachFrom === 'HIGH' ? 'high intent only' : 'medium intent and up'}, {r.rules.sendPolicy === 'VERIFIED_ONLY' ? 'verified emails only' : 'verified or self-published emails'}{r.rules.businessEmailsOnly ? ', business emails only' : ''}.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="grid gap-5 lg:grid-cols-2">
+        <div className="space-y-2">
+          {rows.length === 0 && <p className="text-sm text-slate-500">Nothing blocked.</p>}
+          {rows.map(([code, n]) => (
+            <div key={code} className="flex gap-3 rounded-lg border border-slate-100 p-3">
+              <span className="w-12 shrink-0 text-right text-lg font-semibold tabular-nums text-slate-900">{n}</span>
+              <div>
+                <p className="text-sm font-medium text-slate-800">{BLOCKER_TEXT[code]?.title || code}</p>
+                <p className="text-xs text-slate-500">{BLOCKER_TEXT[code]?.body}</p>
+              </div>
+            </div>
+          ))}
+          {!!r.blockers.UNVERIFIED && (
+            <p className="text-xs text-slate-500">
+              {hunter
+                ? 'Hunter checks these automatically on each run, but only when verification is the last thing missing (half a credit each, never below your reserve).'
+                : 'Add a verifier key (or HUNTER_API_KEY) to confirm these mailboxes.'}
+            </p>
+          )}
+        </div>
+        <div className="space-y-2">
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Quick fixes</p>
+          {fixes.length === 0 && <p className="text-sm text-slate-500">No rule change would add anyone right now. More research, better sources (builder-focused videos, Hacker News) or a verifier will.</p>}
+          {fixes.map((f) => (
+            <div key={f.key} className="flex items-start justify-between gap-3 rounded-lg border border-indigo-100 bg-indigo-50/50 p-3">
+              <div>
+                <p className="text-sm font-medium text-slate-800">{f.label}</p>
+                <p className="text-xs text-slate-500">{f.hint}</p>
+              </div>
+              <Button size="sm" onClick={() => onFix(f.change, f.key)} loading={fixing === f.key} className="shrink-0">+{f.count} ready</Button>
+            </div>
+          ))}
+          <p className="text-[11px] text-slate-400">You can change these any time under Rules.</p>
+        </div>
+      </CardContent>
+    </Card>
   )
 }

@@ -195,7 +195,8 @@ export function computeIntent(i: IntentInput): { intent: number; relevance: Rele
   if (i.bioPersona) evidence.push(`Bio: ${i.bioTitle || i.bioPersona.toLowerCase().replace('_', ' ')}`)
 
   const strong = strongComment || strongBio || !!i.ownChannelAi
-  const relevance: Relevance = intent >= 60 && strong ? 'HIGH' : intent >= 35 ? 'MEDIUM' : 'LOW'
+  // Calibrated on real comment data: people with a strong signal cluster at 52-59, so 60 missed them
+  const relevance: Relevance = intent >= 52 && strong ? 'HIGH' : intent >= 35 ? 'MEDIUM' : 'LOW'
   return { intent, relevance, evidence }
 }
 
@@ -317,11 +318,19 @@ export function scoreVideo(v: { title: string; description?: string | null; view
 
 const NOT_NAME = /^(the|ai|tech|official|tv|channel|studio|media|gaming|labs?|solutions?|agency|digital|crypto|bot|automation|automations|academy|hub|world|daily|news|pro|guru|master|king|queen|mr|mrs|ms|dr|real|its|i|am|youtube|music|productions?|group|inc|llc|ltd|company|team|official|creator|creators|dev|devs|code|coding|online|global|marketing|ventures?|capital|systems?)$/i
 
+/**
+ * YouTube gives handle-only accounts an auto suffix: "@BrandonWu-z5i", "@-RamkumarP-ds1zf".
+ * Strip it (only when it contains a digit, so real hyphenated names survive).
+ */
+export function cleanHandle(h: string) {
+  return h.trim().replace(/^@/, '').replace(/^-+/, '').replace(/-(?=[a-z0-9]{3,6}$)(?=.*\d)[a-z0-9]{3,6}$/i, '')
+}
+
 /** A first/last name only when the display name clearly is one */
 export function parseName(displayName: string): { firstName?: string; lastName?: string } {
-  let s = displayName.trim().replace(/^@/, '').replace(/[-_.]?\d+$/, '')
-  // "@JohnSmith" → "John Smith"
-  if (!/\s/.test(s) && /^[A-Z][a-z]{2,11}[A-Z][a-z]{2,14}$/.test(s)) s = s.replace(/([a-z])([A-Z])/, '$1 $2')
+  let s = cleanHandle(displayName).replace(/[-_.]?\d+$/, '')
+  // "@JohnSmith" → "John Smith", "@BrandonWu" → "Brandon Wu"
+  if (!/\s/.test(s) && /^[A-Z][a-z]{2,11}[A-Z][a-z]{1,14}$/.test(s)) s = s.replace(/([a-z])([A-Z])/, '$1 $2')
   if (/[\d_@]/.test(s)) return {}
   const parts = s.split(/\s+/).filter(Boolean)
   if (!parts.length || parts.length > 3) return {}

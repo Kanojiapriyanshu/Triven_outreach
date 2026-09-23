@@ -2,7 +2,7 @@ import prisma from '../prisma'
 import { quotaUsage, youtubeConfigured } from './youtube'
 import { aiConfigured } from './ai'
 import { verifierProvider } from './verify'
-import { pipelineBacklog } from './pipeline'
+import { pipelineBacklog, readinessBreakdown } from './pipeline'
 import { searchProvider } from './identity'
 import { finderProviders } from './finders'
 import { hunterAccount } from './hunter'
@@ -71,7 +71,7 @@ export async function audienceOverview() {
     LIMIT 100`
 
   const pct = (a: number, b: number) => (b ? Math.round((a / b) * 1000) / 10 : null)
-  const [quota, backlog, hunter] = await Promise.all([quotaUsage(), pipelineBacklog(), hunterAccount().catch(() => null)])
+  const [quota, backlog, hunter, readiness] = await Promise.all([quotaUsage(), pipelineBacklog(), hunterAccount().catch(() => null), readinessBreakdown()])
 
   return {
     config: {
@@ -82,6 +82,7 @@ export async function audienceOverview() {
       finders: finderProviders(),
     },
     hunter,
+    readiness,
     quota,
     backlog,
     funnel: { comments, prospects, relevant, high, enriched, withEmail, verified, ready, inCampaign, contacted, followUps, replied, interested, meetings, won },

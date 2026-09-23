@@ -96,7 +96,7 @@ Points:
 
 The score is stored with a human-readable **evidence list** (e.g. "Runs an agency", "Commented on 3 videos",
 "Own channel: 14 videos about n8n"), shown in the UI and passed to the AI reviewer.
-Relevance: HIGH ≥ 60 **and** at least one strong signal; MEDIUM ≥ 35; else LOW.
+Relevance: HIGH ≥ 52 **and** at least one strong signal (calibrated on real data; strong-signal people clustered at 52–59); MEDIUM ≥ 35; else LOW.
 
 ### 3.3 Identity score (0–100)
 

@@ -29,6 +29,8 @@ export interface AudienceSettings {
   useFinders: boolean
   /** Hunter credits to always leave untouched (for your own manual lookups) */
   hunterReserve: number
+  /** With no verifier key: use Hunter credits to verify only the emails that would make someone ready */
+  hunterSmartVerify: boolean
 }
 
 export const DEFAULT_AUDIENCE_SETTINGS: AudienceSettings = {
@@ -46,6 +48,7 @@ export const DEFAULT_AUDIENCE_SETTINGS: AudienceSettings = {
   useWebSearch: true,
   useFinders: true,
   hunterReserve: 5,
+  hunterSmartVerify: true,
 }
 
 const KEY = 'audience'

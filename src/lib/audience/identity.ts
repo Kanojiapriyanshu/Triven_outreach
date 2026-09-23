@@ -2,6 +2,7 @@
 // Uses a web-search API (not scraping a search engine) and only accepts a result when the
 // person's name or handle actually matches it. A site is accepted only if it mentions them.
 import { fetchHtml, hostOf, htmlToText, SHARED_HOSTS } from './enrich'
+import { cleanHandle } from './classify'
 
 export interface SearchResult { url: string; title: string; snippet: string }
 
@@ -64,7 +65,7 @@ export async function resolveIdentity(p: {
   const first = p.firstName?.trim() || ''
   const last = p.lastName?.trim() || ''
   const fullName = first && last ? `${first} ${last}` : ''
-  const handle = (p.handle || '').replace(/^@/, '').toLowerCase()
+  const handle = cleanHandle(p.handle || '').toLowerCase()
   const handleOk = handle.length >= 5 && /[a-z]/.test(handle) && !GENERIC_HANDLE.test(handle)
   if (!fullName && !handleOk) {
     out.notes.push('Identity search skipped: no real name or distinctive handle')

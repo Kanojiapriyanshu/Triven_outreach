@@ -104,6 +104,15 @@ async function providerCheck(provider: Provider, email: string): Promise<Verdict
   return { status, method: provider, detail: r }
 }
 
+/** Hunter's mailbox check on its own (0.5 credit), for the few addresses that decide readiness */
+export async function verifyWithHunter(email: string): Promise<Verdict> {
+  try {
+    return await providerCheck('HUNTER', email)
+  } catch (err) {
+    return { status: 'UNKNOWN', method: 'HUNTER', detail: `verifier error: ${(err as Error).message}`.slice(0, 180) }
+  }
+}
+
 /**
  * Full check. Without a provider the best we can honestly say is UNKNOWN (domain receives
  * mail) or INVALID (it can't). Only a provider's mailbox-level "valid" becomes VERIFIED.
