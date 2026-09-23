@@ -534,6 +534,14 @@ model Prospect {
   // NEW | RESEARCHING | PROFILE_FOUND | EMAIL_FOUND | EMAIL_VERIFIED | READY_TO_CONTACT | NO_CONTACT
   // | IN_CAMPAIGN | INVALID_EMAIL | DO_NOT_CONTACT
   consentSensitive   Boolean   @default(false) // EU/UK/CA/AU/NZ: stricter outreach rules
+  intentScore        Int       @default(0)     // how likely they want to build/buy (0-100)
+  intentEvidence     String[]  @default([])    // "Runs an agency", "Commented on 3 videos" …
+  identityScore      Int       @default(0)     // how sure we are who they are (0-100)
+  ownChannelSummary  String?                   // "14 videos, mostly about n8n / AI agents"
+  ownChannelAi       Boolean   @default(false) // their own uploads are about AI/automation
+  deepReadAt         DateTime?                 // own channel + uploads read via the API
+  webSearchedAt      DateTime?                 // identity search done
+  finderCheckedAt    DateTime?                 // email-finder APIs asked
   aiCheckedAt        DateTime?
   enrichedAt         DateTime?
   enrichAttempts     Int       @default(0)
@@ -561,8 +569,9 @@ model ProspectEmail {
   id           String    @id @default(cuid())
   prospectId   String
   email        String    @unique
-  source       String // CHANNEL | COMMENT | WEBSITE | GITHUB | LINK_PAGE | PATTERN | MANUAL
+  source       String // CHANNEL | CHANNEL_VIDEO | COMMENT | WEBSITE | LINK_PAGE | HUNTER | APOLLO | PATTERN | MANUAL
   sourceUrl    String?
+  confidence   Int? // finder / verifier confidence 0-100
   status       String    @default("UNKNOWN") // VERIFIED | RISKY | UNKNOWN | INVALID
   verifyMethod String? // MX | ZEROBOUNCE | NEVERBOUNCE | MILLIONVERIFIER | REOON | BOUNCE
   verifyDetail String?

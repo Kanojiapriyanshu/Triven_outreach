@@ -23,9 +23,9 @@ const fetcher = (url: string) => fetch(url).then(async (r) => {
 })
 
 interface Overview {
-  config: { youtube: boolean; ai: boolean; verifier: string | null; github: boolean }
+  config: { youtube: boolean; ai: boolean; verifier: string | null; search: string | null; finders: string[] }
   quota: { used: number; limit: number; left: number }
-  backlog: { videos: number; review: number; enrich: number; verify: number; total: number }
+  backlog: { videos: number; review: number; enrich: number; identity: number; finder: number; verify: number; total: number }
   funnel: Record<string, number>
   quality: { relevantPct: number | null; profilePct: number | null; emailFoundPct: number | null; verifiedPct: number | null; repeatMerged: number; invalidEmailPct: number | null; emailsTotal: number; dnc: number }
   outreach: { replyPct: number | null; interestedPct: number | null; meetingPct: number | null; wonPct: number | null }
@@ -40,8 +40,8 @@ interface PresetCampaign { key: string; name: string; personas: string[]; id: st
 const FUNNEL: Array<{ key: string; label: string; hint?: string }> = [
   { key: 'comments', label: 'Comments collected' },
   { key: 'prospects', label: 'People (deduplicated)' },
-  { key: 'relevant', label: 'Relevant', hint: 'high + medium' },
-  { key: 'high', label: 'High priority' },
+  { key: 'relevant', label: 'Real interest', hint: 'high + medium intent' },
+  { key: 'high', label: 'Strong buying intent' },
   { key: 'withEmail', label: 'Email found' },
   { key: 'verified', label: 'Email verified' },
   { key: 'ready', label: 'Ready to contact' },
@@ -87,7 +87,8 @@ export default function AudienceOverviewPage() {
     { ok: !!outreach?.senderAddress, title: 'Postal address in the email footer', need: true, body: 'Required in commercial email to the US, Canada and Australia. Set it in Settings.' },
     { ok: data.config.ai, title: 'AI review (optional)', need: false, body: 'ANTHROPIC_API_KEY lets Claude re-check shortlisted people and write a one-line personal opener from their comment.' },
     { ok: !!outreach?.builderUrl, title: 'Try-it link (optional)', need: false, body: 'Used in the last follow-up. Without it, people are asked to reply for access.' },
-    { ok: data.config.github, title: 'GitHub token (optional)', need: false, body: 'GITHUB_TOKEN raises the GitHub profile lookup limit from 60 to 5,000 an hour.' },
+    { ok: !!data.config.search, title: data.config.search ? `Identity search: ${data.config.search.toLowerCase()}` : 'Identity search (recommended)', need: false, body: 'BRAVE_SEARCH_API_KEY or SERPER_API_KEY. Finds the website and LinkedIn of high-intent people whose YouTube profile shows neither, so the email finders know who to look for.' },
+    { ok: data.config.finders.length > 0, title: data.config.finders.length ? `Email finders: ${data.config.finders.map((f) => f.toLowerCase()).join(' + ')}` : 'Email finders (recommended)', need: false, body: 'HUNTER_API_KEY and/or APOLLO_API_KEY. Once we know who someone is and where they work, these return their business email. This is where most business emails come from.' },
   ] : []
 
   return (
@@ -112,7 +113,7 @@ export default function AudienceOverviewPage() {
           <PipelineRunner backlog={data?.backlog} onProgress={() => mutate()} />
           {data && (
             <div className="flex flex-wrap items-center gap-4 text-xs text-slate-500">
-              <span>Waiting: {data.backlog.videos} video{data.backlog.videos === 1 ? '' : 's'} to read · {data.backlog.review} to review · {data.backlog.enrich} to research · {data.backlog.verify} emails to verify</span>
+              <span>Waiting: {data.backlog.videos} video{data.backlog.videos === 1 ? '' : 's'} to read · {data.backlog.review} to review · {data.backlog.enrich} to research · {data.backlog.identity} to identify · {data.backlog.finder} for email finders · {data.backlog.verify} emails to verify</span>
               <span className="flex items-center gap-1.5" title="Resets at midnight Pacific time">
                 <Gauge className="h-3.5 w-3.5" />YouTube quota {fmtNum(data.quota.used)}/{fmtNum(data.quota.limit)}
                 <span className="inline-block h-1.5 w-20 rounded-full bg-slate-100 overflow-hidden">
@@ -365,6 +366,37 @@ function SettingsDialog({ open, onOpenChange, onSaved }: { open: boolean; onOpen
                 </span>
               </span>
             </label>
+
+            <div className="rounded-lg border border-slate-200 p-3 space-y-3">
+              <p className="text-sm font-semibold text-slate-800">Who counts as a real prospect</p>
+              <label className="flex gap-2.5 items-start">
+                <input type="checkbox" checked={form.businessEmailsOnly} onChange={(e) => set('businessEmailsOnly', e.target.checked)} className="mt-1" />
+                <span>
+                  <span className="text-sm font-medium text-slate-800">Business emails only</span>
+                  <span className="block text-xs text-slate-500">Personal inboxes (gmail, outlook…) are skipped, unless the person published that address for contact (channel bio, their video descriptions, their site) and shows strong intent.</span>
+                </span>
+              </label>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div>
+                  <Label>Email people with</Label>
+                  <select value={form.outreachFrom} onChange={(e) => set('outreachFrom', e.target.value as 'HIGH' | 'MEDIUM')} className="mt-1 h-9 w-full rounded-lg border border-slate-300 px-2 text-sm">
+                    <option value="HIGH">Strong buying intent only (recommended)</option>
+                    <option value="MEDIUM">Medium intent and up</option>
+                  </select>
+                </div>
+                <div>
+                  <Label>Minimum identity</Label>
+                  <div className="flex items-center gap-1.5 mt-1">
+                    <Input type="number" min={0} max={100} step={5} value={form.minIdentity} onChange={(e) => set('minIdentity', Math.max(0, Math.min(100, Number(e.target.value) || 0)))} className="w-20" />
+                    <span className="text-xs text-slate-500">/100 · 40 = a confirmed site, or name + company</span>
+                  </div>
+                </div>
+              </div>
+              <div className="flex flex-wrap gap-5">
+                <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={form.useWebSearch} onChange={(e) => set('useWebSearch', e.target.checked)} />Identity search (web search API)</label>
+                <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={form.useFinders} onChange={(e) => set('useFinders', e.target.checked)} />Email finders (Hunter / Apollo)</label>
+              </div>
+            </div>
 
             <div>
               <Label>Countries</Label>

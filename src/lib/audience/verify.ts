@@ -40,12 +40,14 @@ export function emailTraits(email: string) {
 
 // ─── Providers ───────────────────────────────────────────────────────────────
 
-type Provider = 'ZEROBOUNCE' | 'NEVERBOUNCE' | 'MILLIONVERIFIER' | 'REOON'
+type Provider = 'ZEROBOUNCE' | 'NEVERBOUNCE' | 'MILLIONVERIFIER' | 'REOON' | 'HUNTER'
 const PROVIDER_ENV: Record<Provider, string> = {
   ZEROBOUNCE: 'ZEROBOUNCE_API_KEY',
   NEVERBOUNCE: 'NEVERBOUNCE_API_KEY',
   MILLIONVERIFIER: 'MILLIONVERIFIER_API_KEY',
   REOON: 'REOON_API_KEY',
+  // last: dedicated verifiers first; Hunter's key doubles as a verifier when it's the only one
+  HUNTER: 'HUNTER_API_KEY',
 }
 
 export function verifierProvider(): Provider | null {
@@ -84,6 +86,14 @@ async function providerCheck(provider: Provider, email: string): Promise<Verdict
     const r = String(d.result || '')
     const status: EmailStatus = r === 'ok' ? 'VERIFIED' : r === 'invalid' || r === 'disposable' ? 'INVALID' : r === 'catch_all' ? 'RISKY' : 'UNKNOWN'
     return { status, method: provider, detail: [r, d.subresult].filter(Boolean).join(' / ') }
+  }
+  if (provider === 'HUNTER') {
+    const d = await getJson(`https://api.hunter.io/v2/email-verifier?email=${e}&api_key=${key}`) as { data?: { status?: string; result?: string; score?: number } }
+    const r = d.data?.result || '', st = d.data?.status || ''
+    const status: EmailStatus = st === 'invalid' || st === 'disposable' || r === 'undeliverable' ? 'INVALID'
+      : st === 'valid' || (st === 'webmail' && r === 'deliverable') ? 'VERIFIED'
+      : st === 'accept_all' || r === 'risky' ? 'RISKY' : 'UNKNOWN'
+    return { status, method: provider, detail: [st, r, d.data?.score !== undefined ? `score ${d.data.score}` : ''].filter(Boolean).join(' / ') }
   }
   const d = await getJson(`https://emailverifier.reoon.com/api/v1/verify?email=${e}&key=${key}&mode=power`)
   const r = String(d.status || '')

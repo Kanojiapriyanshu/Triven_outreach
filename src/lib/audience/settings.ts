@@ -17,6 +17,16 @@ export interface AudienceSettings {
   useAi: boolean
   /** Delete non-relevant comments/profiles after this many days */
   retentionDays: number
+  /** Free-mail (gmail…) only when the person published it as a contact AND intent is high */
+  businessEmailsOnly: boolean
+  /** Lowest relevance that may be emailed */
+  outreachFrom: 'HIGH' | 'MEDIUM'
+  /** Minimum identity score (0-100) before someone may be emailed */
+  minIdentity: number
+  /** Look people up with the web-search API when YouTube gives no site */
+  useWebSearch: boolean
+  /** Ask email-finder APIs (Hunter / Apollo) once identity is known */
+  useFinders: boolean
 }
 
 export const DEFAULT_AUDIENCE_SETTINGS: AudienceSettings = {
@@ -28,6 +38,11 @@ export const DEFAULT_AUDIENCE_SETTINGS: AudienceSettings = {
   autoRun: true,
   useAi: true,
   retentionDays: 30,
+  businessEmailsOnly: true,
+  outreachFrom: 'HIGH',
+  minIdentity: 40,
+  useWebSearch: true,
+  useFinders: true,
 }
 
 const KEY = 'audience'

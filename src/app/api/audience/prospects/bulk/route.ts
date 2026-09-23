@@ -9,7 +9,7 @@ import { requireAuth } from '@/lib/auth'
 import prisma from '@/lib/prisma'
 import { prospectWhere } from '@/lib/audience/filters'
 import { pushToCampaign, markDoNotContact, forgetProspects } from '@/lib/audience/actions'
-import { enrichProspects, verifyPending, updateStatus } from '@/lib/audience/pipeline'
+import { enrichProspects, identityStep, finderStep, verifyPending, updateStatus } from '@/lib/audience/pipeline'
 import { getAudienceSettings } from '@/lib/audience/settings'
 
 export const maxDuration = 60
@@ -45,9 +45,16 @@ export async function POST(req: NextRequest) {
       }
       case 'enrich': {
         // Re-research on demand (max 12 per call; the worker handles bigger batches)
-        await prisma.prospect.updateMany({ where: { id: { in: ids }, status: { not: 'DO_NOT_CONTACT' } }, data: { enrichedAt: null, enrichAttempts: 0 } })
-        const r = await enrichProspects(Date.now() + 50_000, await getAudienceSettings(), ids.slice(0, 12))
-        return NextResponse.json({ ...r, queued: Math.max(0, ids.length - 12) })
+        // Full research on demand: deep read → identity search → email finders → verify (max 6 per call)
+        const settings = await getAudienceSettings()
+        const now = ids.slice(0, 6)
+        await prisma.prospect.updateMany({ where: { id: { in: ids }, status: { not: 'DO_NOT_CONTACT' } }, data: { enrichedAt: null, enrichAttempts: 0, webSearchedAt: null, finderCheckedAt: null } })
+        const deadline = Date.now() + 52_000
+        const r = await enrichProspects(Math.min(deadline, Date.now() + 25_000), settings, now)
+        const id = await identityStep(Math.min(deadline, Date.now() + 15_000), settings, now)
+        const fi = await finderStep(Math.min(deadline, Date.now() + 12_000), settings, now)
+        const ve = await verifyPending(deadline, now)
+        return NextResponse.json({ ...r, emailsFound: r.emailsFound + id.emailsFound + fi.found, websites: id.websites, linkedIn: id.linkedIn, finderFound: fi.found, verified: ve.verified, queued: Math.max(0, ids.length - now.length) })
       }
       case 'verify':
         return NextResponse.json(await verifyPending(Date.now() + 50_000, ids))

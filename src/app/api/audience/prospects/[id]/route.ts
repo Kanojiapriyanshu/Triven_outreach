@@ -3,7 +3,7 @@ import { z } from 'zod'
 import { requireAuth } from '@/lib/auth'
 import prisma from '@/lib/prisma'
 import { forgetProspects } from '@/lib/audience/actions'
-import { updateStatus, bestEmail } from '@/lib/audience/pipeline'
+import { updateStatus, bestEmail, readinessGap } from '@/lib/audience/pipeline'
 import { getAudienceSettings } from '@/lib/audience/settings'
 import { CONSENT_SENSITIVE, regionOf } from '@/lib/audience/taxonomy'
 
@@ -22,7 +22,7 @@ export async function GET(_: NextRequest, { params }: { params: Promise<{ id: st
   if (!p) return NextResponse.json({ error: 'Not found' }, { status: 404 })
   const settings = await getAudienceSettings()
   const best = bestEmail(p.emails, p, settings)
-  return NextResponse.json({ ...p, sendableEmailId: best?.id || null, settings: { sendPolicy: settings.sendPolicy, strictRegions: settings.strictRegions } })
+  return NextResponse.json({ ...p, sendableEmailId: best?.id || null, readinessGap: p.lead ? null : readinessGap(p, settings), settings: { sendPolicy: settings.sendPolicy, strictRegions: settings.strictRegions } })
 }
 
 const patchSchema = z.object({

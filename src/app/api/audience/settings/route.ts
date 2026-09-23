@@ -15,6 +15,11 @@ const schema = z.object({
   autoRun: z.boolean(),
   useAi: z.boolean(),
   retentionDays: z.number().int().min(7).max(365),
+  businessEmailsOnly: z.boolean(),
+  outreachFrom: z.enum(['HIGH', 'MEDIUM']),
+  minIdentity: z.number().int().min(0).max(100),
+  useWebSearch: z.boolean(),
+  useFinders: z.boolean(),
 })
 
 export async function GET() {
@@ -32,7 +37,8 @@ export async function PUT(req: NextRequest) {
   await saveAudienceSettings(parsed.data)
   // Rules that decide "ready to contact" changed: re-evaluate everyone
   const rulesChanged = before.sendPolicy !== parsed.data.sendPolicy || before.strictRegions !== parsed.data.strictRegions ||
-    before.countries.join() !== parsed.data.countries.join()
+    before.countries.join() !== parsed.data.countries.join() || before.businessEmailsOnly !== parsed.data.businessEmailsOnly ||
+    before.outreachFrom !== parsed.data.outreachFrom || before.minIdentity !== parsed.data.minIdentity
   const updated = rulesChanged ? await updateAllStatuses(Date.now() + 45_000) : 0
   return NextResponse.json({ ...parsed.data, reevaluated: updated })
 }

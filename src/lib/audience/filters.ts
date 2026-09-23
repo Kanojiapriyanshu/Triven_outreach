@@ -30,6 +30,13 @@ export function prospectWhere(sp: URLSearchParams): Prisma.ProspectWhereInput {
   if (email === 'verified') and.push({ emails: { some: { status: 'VERIFIED' } } })
   else if (email === 'any') and.push({ emails: { some: { status: { not: 'INVALID' } } } })
   else if (email === 'none') and.push({ emails: { none: { status: { not: 'INVALID' } } } })
+  else if (email === 'business') and.push({ emails: { some: { status: 'VERIFIED', isFree: false } } })
+
+  if (sp.get('identified') === 'true') and.push({ identityScore: { gte: 40 } })
+  if (sp.get('identified') === 'false') and.push({ identityScore: { lt: 40 } })
+  const minIntent = Number(sp.get('minIntent') || 0)
+  if (minIntent > 0) and.push({ intentScore: { gte: minIntent } })
+  if (sp.get('ownChannelAi') === 'true') and.push({ ownChannelAi: true })
 
   const channelId = sp.get('channelId')
   const videoId = sp.get('videoId')

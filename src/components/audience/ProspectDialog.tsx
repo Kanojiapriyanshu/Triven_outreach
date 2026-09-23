@@ -29,14 +29,19 @@ interface Detail {
   otherLinks: string[]; location: string | null; bio: string | null; persona: string | null; interestCategory: string | null
   relevance: string; score: number; reason: string | null; topic: string | null; icebreaker: string | null; status: string
   consentSensitive: boolean; enrichedAt: string | null; enrichNotes: string | null; aiCheckedAt: string | null; firstSeenAt: string
-  emails: Array<{ id: string; email: string; source: string; sourceUrl: string | null; status: string; verifyMethod: string | null; verifyDetail: string | null; isPrimary: boolean; isRole: boolean; isFree: boolean }>
+  emails: Array<{ id: string; email: string; source: string; sourceUrl: string | null; status: string; verifyMethod: string | null; verifyDetail: string | null; isPrimary: boolean; isRole: boolean; isFree: boolean; confidence: number | null }>
   comments: Array<{ id: string; youtubeCommentId: string; text: string; relevance: string; score: number; signals: string[]; likeCount: number; publishedAt: string | null; video: { title: string; youtubeVideoId: string; channel: { title: string } } }>
   lead: { id: string; status: string; firstEmailSentAt: string | null; hasReplied: boolean; campaign: { id: string; name: string } | null } | null
   sendableEmailId: string | null
+  readinessGap: string | null
+  intentScore: number; intentEvidence: string[]; identityScore: number; ownChannelSummary: string | null; ownChannelAi: boolean
+  deepReadAt: string | null; webSearchedAt: string | null; finderCheckedAt: string | null
 }
 
 const SOURCE_LABEL: Record<string, string> = {
-  CHANNEL: 'YouTube bio', COMMENT: 'their comment', WEBSITE: 'their website', GITHUB: 'GitHub profile', LINK_PAGE: 'link-in-bio page', PATTERN: 'name pattern (verified)', MANUAL: 'added by hand',
+  CHANNEL: 'their YouTube bio', CHANNEL_VIDEO: 'their own video description', COMMENT: 'their comment', WEBSITE: 'their website',
+  LINK_PAGE: 'link-in-bio page', HUNTER: 'Hunter', APOLLO: 'Apollo', PATTERN: 'name pattern (verified)', MANUAL: 'added by hand',
+  GITHUB: 'GitHub profile (no longer used)',
 }
 
 export default function ProspectDialog({ id, onClose, onChanged, onPush }: { id: string | null; onClose: () => void; onChanged: () => void; onPush: (id: string) => void }) {
@@ -136,6 +141,11 @@ export default function ProspectDialog({ id, onClose, onChanged, onPush }: { id:
                     {' '}· first seen {fmtRelative(p.firstSeenAt)}
                   </p>
                   {p.reason && <p className="text-xs text-slate-600 mt-1.5">{p.reason}</p>}
+                  {!p.lead && (
+                    <p className={`mt-1.5 text-xs font-medium ${p.readinessGap ? 'text-amber-700' : 'text-emerald-700'}`}>
+                      {p.readinessGap ? `Not ready: ${p.readinessGap}` : 'Ready to contact'}
+                    </p>
+                  )}
                 </div>
               </div>
             </DialogHeader>
@@ -157,6 +167,25 @@ export default function ProspectDialog({ id, onClose, onChanged, onPush }: { id:
                     </select>
                   </label>
                 </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="rounded-lg bg-slate-50 px-3 py-2">
+                    <p className="text-[11px] text-slate-500">Buying intent</p>
+                    <p className="text-lg font-semibold text-slate-900">{p.intentScore}<span className="text-xs font-normal text-slate-400">/100</span></p>
+                  </div>
+                  <div className="rounded-lg bg-slate-50 px-3 py-2" title="Site +40, LinkedIn +20, company +15, full name +15, own channel +10">
+                    <p className="text-[11px] text-slate-500">Identity</p>
+                    <p className="text-lg font-semibold text-slate-900">{p.identityScore}<span className="text-xs font-normal text-slate-400">/100</span></p>
+                  </div>
+                </div>
+                {p.intentEvidence.filter((e) => e !== 'No buying signals').length > 0 && (
+                  <ul className="space-y-0.5">
+                    {p.intentEvidence.filter((e) => e !== 'No buying signals').map((e) => <li key={e} className="text-xs text-emerald-800">✓ {e}</li>)}
+                  </ul>
+                )}
+                {p.ownChannelSummary && <p className="text-xs text-slate-600">Their channel: {p.ownChannelSummary}</p>}
+                <p className="text-[11px] text-slate-400">
+                  Own channel read {p.deepReadAt ? fmtRelative(p.deepReadAt) : 'no'} · web search {p.webSearchedAt ? fmtRelative(p.webSearchedAt) : 'no'} · email finders {p.finderCheckedAt ? fmtRelative(p.finderCheckedAt) : 'no'}
+                </p>
                 <div className="flex flex-wrap gap-1.5">
                   {(['HIGH', 'MEDIUM', 'LOW', 'SPAM'] as const).map((r) => (
                     <button key={r} onClick={() => fetch('/api/audience/prospects/bulk', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'setRelevance', ids: [p.id], relevance: r }) }).then(changed)}
@@ -220,7 +249,8 @@ export default function ProspectDialog({ id, onClose, onChanged, onPush }: { id:
                       </div>
                       <p className="text-[11px] text-slate-500 mt-1">
                         From {e.sourceUrl ? <a href={e.sourceUrl} target="_blank" rel="noreferrer" className="underline">{SOURCE_LABEL[e.source] || e.source}</a> : SOURCE_LABEL[e.source] || e.source}
-                        {e.isRole && ' · shared inbox'}{e.isFree && ' · personal mail'}
+                        {e.isRole && ' · shared inbox'}{e.isFree ? ' · personal mail' : ' · business domain'}
+                        {e.confidence ? ` · confidence ${e.confidence}` : ''}
                         {e.verifyDetail && <> · {e.verifyDetail}</>}
                         {e.id === p.sendableEmailId && <span className="text-emerald-700 font-medium"> · will be used</span>}
                       </p>

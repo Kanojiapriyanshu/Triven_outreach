@@ -6,7 +6,7 @@ import {
   getChannels, getChannelByHandle, getVideos, latestUploadIds, parseYouTubeInput, searchChannels,
   isoDurationSeconds, bestThumb, type YtChannel, type YtVideo,
 } from './youtube'
-import { bestEmail, updateStatus } from './pipeline'
+import { bestEmail, readinessGap, updateStatus } from './pipeline'
 import { getAudienceSettings } from './settings'
 import { INTERESTS, AUDIENCE_CAMPAIGNS, type Interest } from './taxonomy'
 
@@ -182,9 +182,10 @@ export async function pushToCampaign(prospectIds: string[], target: { campaignId
     const skip = (reason: string) => out.skipped.push({ id: p.id, name, reason })
     if (p.lead) { skip('already in a campaign'); continue }
     if (p.status === 'DO_NOT_CONTACT') { skip('do not contact'); continue }
-    if (p.relevance === 'LOW' || p.relevance === 'SPAM') { skip(`relevance is ${p.relevance.toLowerCase()}`); continue }
+    const gap = readinessGap(p, settings)
+    if (gap) { skip(gap); continue }
     const email = bestEmail(p.emails, p, settings)
-    if (!email) { skip('no email that passes the verification and country rules'); continue }
+    if (!email) { skip('no email that passes the rules'); continue }
 
     const suppressed = await prisma.suppressionEntry.findFirst({ where: { OR: [{ email: email.email }, { domain: email.email.split('@')[1] }] } })
     if (suppressed) {
@@ -221,11 +222,11 @@ export async function pushToCampaign(prospectIds: string[], target: { campaignId
         priority: p.relevance === 'HIGH' ? 'HIGH' : 'MEDIUM',
         score: p.score,
         assignedUserId: userId,
-        whyThisLead: p.reason,
+        whyThisLead: [p.reason, p.intentEvidence.length ? `Evidence: ${p.intentEvidence.join('; ')}` : ''].filter(Boolean).join('\n'),
         personalizationNotes: p.icebreaker,
         researchSummary: p.channelDescription?.slice(0, 2000) || p.bio,
         socialMediaNotes: [`https://www.youtube.com/channel/${p.youtubeChannelId}`, p.twitter, p.github && `https://github.com/${p.github}`, ...p.otherLinks.slice(0, 5)].filter(Boolean).join('\n'),
-        prospectingNotes: `Email source: ${email.source.toLowerCase()} · ${email.status.toLowerCase()}${email.verifyMethod ? ` (${email.verifyMethod.toLowerCase()})` : ''}`,
+        prospectingNotes: `Intent ${p.intentScore}/100 · identity ${p.identityScore}/100 · email from ${email.source.toLowerCase().replace('_', ' ')}, ${email.status.toLowerCase()}${email.verifyMethod ? ` (${email.verifyMethod.toLowerCase()})` : ''}${email.confidence ? `, confidence ${email.confidence}` : ''}`,
         prospectId: p.id,
         sourceChannel: best?.video.channel.title,
         sourceVideo: best?.video.title,

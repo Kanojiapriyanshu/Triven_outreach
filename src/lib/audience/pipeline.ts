@@ -2,18 +2,23 @@
 // inside a 60 s serverless call and simply continues on the next worker tick.
 //
 //   collect  → YouTube comments (deduped by comment id) → rule classification → prospects
+//              with an INTENT score (evidence they build/buy) and an IDENTITY score
 //   review   → optional AI pass over the shortlisted prospects
-//   enrich   → channel bio, links, website, GitHub → profile + candidate emails
+//   enrich   → deep read via the API (bio, their uploads + descriptions), links, own website
+//   identity → web-search API finds site / LinkedIn for high-intent people YouTube didn't reveal
+//   finder   → Hunter / Apollo business email once identity is known
 //   verify   → MX / verifier → VERIFIED | RISKY | UNKNOWN | INVALID
-//   status   → READY_TO_CONTACT when relevance, email and compliance rules all pass
+//   status   → READY_TO_CONTACT when intent, identity, business email and country rules all pass
 import type { Prisma, Prospect, ProspectEmail } from '@prisma/client'
 import prisma from '../prisma'
-import { classifyComment, parseName, profileHints, relevanceFor } from './classify'
-import { commentThreadsPage, getChannels, YouTubeError, youtubeConfigured, type YtComment } from './youtube'
-import { discover, hostOf, patternGuesses, SHARED_HOSTS } from './enrich'
+import { classifyComment, parseName, profileHints, computeIntent, computeIdentity, ownChannelProfile } from './classify'
+import { commentThreadsPage, getChannels, getVideos, latestUploadIds, YouTubeError, youtubeConfigured, type YtComment } from './youtube'
+import { discover, hostOf, patternGuesses, SHARED_HOSTS, crawlWebsite, type Findings } from './enrich'
+import { resolveIdentity, searchProvider } from './identity'
+import { findBusinessEmail, finderProviders } from './finders'
 import { emailTraits, verifierProvider, verifyEmail, FREE_MAIL } from './verify'
 import { aiConfigured, reviewProspects, describeAiError } from './ai'
-import { CONSENT_SENSITIVE, regionOf, type Relevance } from './taxonomy'
+import { CONSENT_SENSITIVE, regionOf } from './taxonomy'
 import { getAudienceSettings, type AudienceSettings } from './settings'
 
 const left = (deadline: number) => deadline - Date.now()
@@ -167,32 +172,33 @@ export async function refreshProspects(ids: string[]) {
     if (!best) return null
     const nonSpam = list.filter((c) => c.relevance !== 'SPAM')
     const bio = profileHints(p.channelDescription || p.bio || '')
-    const bioBoost = bio.persona && ['FOUNDER', 'AGENCY', 'CONSULTANT', 'BUSINESS_OWNER', 'DEVELOPER'].includes(bio.persona) ? 15 : bio.persona ? 5 : 0
-    const repeat = Math.min(12, (nonSpam.length - 1) * 4) // engaged across several videos/threads
-    const score = nonSpam.length ? Math.min(100, best.score + repeat + bioBoost + (p.website ? 5 : 0)) : 0
-    const relevance: Relevance = nonSpam.length ? relevanceFor(score) : 'SPAM'
-
-    const signals = [...new Set(nonSpam.flatMap((c) => c.signals))].filter((s) => s !== 'generic')
+    const { intent, relevance, evidence } = computeIntent({
+      comments: list.map((c) => ({ score: c.score, signals: c.signals, relevance: c.relevance, channel: c.video.channel.title, video: c.video.title })),
+      bioPersona: bio.persona,
+      bioTitle: p.jobTitle || bio.jobTitle,
+      ownChannelAi: p.ownChannelAi,
+      ownChannelSummary: p.ownChannelSummary,
+      hasWebsite: !!p.website,
+    })
+    const identity = computeIdentity(p)
     const videos = [...new Set(nonSpam.map((c) => c.video.title))]
     const reason = nonSpam.length
-      ? `${nonSpam.length} comment${nonSpam.length === 1 ? '' : 's'} on ${videos.length === 1 ? `"${videos[0].slice(0, 70)}" (${best.video.channel.title})` : `${videos.length} videos`}` +
-        (signals.length ? `; signals: ${signals.map((s) => s.replace(/_/g, ' ')).join(', ')}` : '') +
-        (bio.persona ? `; bio: ${bio.jobTitle || bio.persona.toLowerCase()}` : '')
+      ? `${evidence.slice(0, 3).join('; ') || 'Engaged comment'} · on ${videos.length === 1 ? `"${videos[0].slice(0, 70)}" (${best.video.channel.title})` : `${videos.length} videos`}`
       : 'Only spam comments'
 
-    // An AI verdict wins over the rules for relevance/persona/topic; counts always refresh
-    const data: Prisma.ProspectUpdateInput = { commentCount: list.length, lastSeenAt: new Date(), bestCommentId: best.id }
+    // Counts, intent and identity always refresh; an AI or human verdict wins for relevance/persona/topic
+    const data: Prisma.ProspectUpdateInput = {
+      commentCount: list.length, lastSeenAt: new Date(), bestCommentId: best.id,
+      intentScore: intent, intentEvidence: evidence, identityScore: identity, score: intent,
+    }
     if (!p.aiCheckedAt) {
       Object.assign(data, {
-        score,
         relevance,
         persona: best.persona || bio.persona || nonSpam.find((c) => c.persona)?.persona || null,
         interestCategory: best.interestCategory || nonSpam.find((c) => c.interestCategory)?.interestCategory || null,
         topic: best.topic || nonSpam.find((c) => c.topic)?.topic || null,
         reason,
       })
-    } else {
-      data.score = Math.max(p.score, score)
     }
     return prisma.prospect.update({ where: { id: p.id }, data })
   }).filter(Boolean) as Prisma.PrismaPromise<Prospect>[]
@@ -211,7 +217,7 @@ export async function aiReview(deadline: number, settings: AudienceSettings) {
       orderBy: { score: 'desc' },
       take: 15,
       select: {
-        id: true, displayName: true, channelDescription: true,
+        id: true, displayName: true, channelDescription: true, intentEvidence: true, ownChannelSummary: true,
         comments: { orderBy: { score: 'desc' }, take: 4, select: { text: true, video: { select: { title: true } } } },
       },
     })
@@ -219,7 +225,8 @@ export async function aiReview(deadline: number, settings: AudienceSettings) {
     let results
     try {
       results = await reviewProspects(batch.map((p) => ({
-        id: p.id, name: p.displayName, bio: p.channelDescription,
+        id: p.id, name: p.displayName,
+        bio: [p.channelDescription, p.ownChannelSummary && `Their channel: ${p.ownChannelSummary}`, p.intentEvidence.length && `Signals: ${p.intentEvidence.join('; ')}`].filter(Boolean).join('\n'),
         comments: p.comments.map((c) => ({ video: c.video.title, text: c.text })),
       })))
     } catch (err) {
@@ -242,8 +249,6 @@ export async function aiReview(deadline: number, settings: AudienceSettings) {
           topic: r.topic.trim().replace(/[.]+$/, '') || null,
           icebreaker: r.icebreaker.trim() || null,
           reason: `AI: ${r.reason}`,
-          // keep the score consistent with the AI's call so sorting still makes sense
-          score: { set: r.relevance === 'HIGH' ? 75 : r.relevance === 'MEDIUM' ? 45 : r.relevance === 'LOW' ? 15 : 0 },
         },
       })
     }))
@@ -267,11 +272,15 @@ export async function enrichProspects(deadline: number, settings: AudienceSettin
   })
   if (!batch.length) return out
 
-  // Channel bios for the whole batch in one 1-unit call
+  // Deep read through the API: channel bios for the whole batch in one 1-unit call, then for
+  // people who upload, their latest videos (1 unit each) and those videos' descriptions (1 unit/50).
+  // Creators list "business inquiries" addresses and their sites there.
+  const own = new Map<string, OwnVideos>()
   if (youtubeConfigured()) {
     try {
       const channels = await getChannels(batch.map((p) => p.youtubeChannelId))
       const byId = new Map(channels.map((c) => [c.id, c]))
+      const uploads: Array<{ prospectId: string; playlist: string }> = []
       for (const p of batch) {
         const c = byId.get(p.youtubeChannelId)
         if (!c) continue
@@ -280,6 +289,19 @@ export async function enrichProspects(deadline: number, settings: AudienceSettin
         p.videoCount = Number(c.statistics?.videoCount || 0)
         p.country = c.snippet.country || p.country
         p.handle = c.snippet.customUrl || p.handle
+        const playlist = c.contentDetails?.relatedPlaylists?.uploads
+        if (p.videoCount > 0 && playlist) uploads.push({ prospectId: p.id, playlist })
+      }
+      const idsByProspect = new Map<string, string[]>()
+      for (const u of uploads) {
+        if (left(deadline) < 20_000) break
+        try { idsByProspect.set(u.prospectId, await latestUploadIds(u.playlist, 8)) } catch { /* private/removed playlist */ }
+      }
+      const videos = await getVideos([...idsByProspect.values()].flat())
+      const byVideo = new Map(videos.map((v) => [v.id, v]))
+      for (const [prospectId, ids] of idsByProspect) {
+        const vs = ids.map((id) => byVideo.get(id)).filter(Boolean) as typeof videos
+        own.set(prospectId, { videos: vs.map((v) => ({ id: v.id, text: `${v.snippet.title}\n${v.snippet.description}` })), titles: vs.map((v) => v.snippet.title) })
       }
     } catch (err) {
       out.errors.push((err as Error).message)
@@ -293,7 +315,7 @@ export async function enrichProspects(deadline: number, settings: AudienceSettin
     for (let p = queue.shift(); p; p = queue.shift()) {
       if (left(deadline) < 15_000) return
       try {
-        out.emailsFound += await enrichOne(p, Math.min(deadline, Date.now() + 25_000))
+        out.emailsFound += await enrichOne(p, Math.min(deadline, Date.now() + 25_000), own.get(p.id))
         out.enriched++
       } catch (err) {
         out.errors.push(`${p.displayName}: ${(err as Error).message}`)
@@ -307,10 +329,12 @@ export async function enrichProspects(deadline: number, settings: AudienceSettin
   return out
 }
 
-async function enrichOne(p: Prospect & { comments: Array<{ text: string }> }, deadline: number) {
-  const f = await discover({ bio: p.channelDescription || '', comments: p.comments.map((c) => c.text), deadline })
+interface OwnVideos { videos: Array<{ id: string; text: string }>; titles: string[] }
 
-  // Better name from GitHub ("Jane Doe") when the YouTube name was a handle
+async function enrichOne(p: Prospect & { comments: Array<{ text: string }> }, deadline: number, ownVideos?: OwnVideos) {
+  const f = await discover({ bio: p.channelDescription || '', comments: p.comments.map((c) => c.text), ownVideos: ownVideos?.videos, deadline })
+  const channelProfile = ownChannelProfile(ownVideos?.titles || [])
+
   let { firstName, lastName } = p
   if (!firstName && f.fullName) {
     const n = parseName(f.fullName)
@@ -355,6 +379,7 @@ async function enrichOne(p: Prospect & { comments: Array<{ text: string }> }, de
       jobTitle: p.jobTitle || f.jobTitle || null,
       location: p.location || f.location || null,
       bio: p.bio || f.bio || null,
+      ...(ownVideos ? { ownChannelAi: channelProfile.ai, ownChannelSummary: channelProfile.summary, deepReadAt: new Date() } : {}),
       enrichedAt: new Date(),
       enrichNotes: [...f.notes, taken.size ? `${taken.size} address(es) already belong to another prospect` : ''].filter(Boolean).join('\n') || 'Nothing public found beyond the YouTube profile',
     },
@@ -366,6 +391,138 @@ async function enrichOne(p: Prospect & { comments: Array<{ text: string }> }, de
 
 function pick<T extends object, K extends keyof T>(o: T, keys: K[]) {
   return Object.fromEntries(keys.map((k) => [k, o[k]])) as Pick<T, K>
+}
+
+// ─── 3b. Identity (web search) ───────────────────────────────────────────────
+// Only for people worth contacting whose YouTube footprint gave us no site or LinkedIn.
+
+function outreachRelevance(s: AudienceSettings) {
+  return s.outreachFrom === 'HIGH' ? ['HIGH'] : ['HIGH', 'MEDIUM']
+}
+
+export async function identityStep(deadline: number, settings: AudienceSettings, onlyIds?: string[]) {
+  const out = { searched: 0, websites: 0, linkedIn: 0, emailsFound: 0, errors: [] as string[] }
+  if (!searchProvider() || !settings.useWebSearch) return out
+  const batch = await prisma.prospect.findMany({
+    where: onlyIds ? { id: { in: onlyIds } } : {
+      webSearchedAt: null, enrichedAt: { not: null }, relevance: { in: outreachRelevance(settings) },
+      website: null, linkedIn: null, status: { notIn: ['DO_NOT_CONTACT', 'IN_CAMPAIGN', 'READY_TO_CONTACT'] },
+    },
+    orderBy: { intentScore: 'desc' },
+    take: onlyIds ? onlyIds.length : 6,
+  })
+  for (const p of batch) {
+    if (left(deadline) < 15_000) break
+    try {
+      const id = await resolveIdentity(p)
+      out.searched++
+      const found: Findings = { emails: [], otherLinks: [], notes: [...id.notes] }
+      // A confirmed site gets the same polite crawl as a site they linked themselves
+      if (id.website && left(deadline) > 12_000) await crawlWebsite(id.website, found)
+      const emailsAdded = await saveEmails(p.id, found.emails)
+      if (id.website) out.websites++
+      if (id.linkedIn) out.linkedIn++
+      out.emailsFound += emailsAdded
+      await prisma.prospect.update({
+        where: { id: p.id },
+        data: {
+          webSearchedAt: new Date(),
+          website: p.website || id.website || null,
+          linkedIn: p.linkedIn || id.linkedIn || null,
+          twitter: p.twitter || id.twitter || null,
+          company: p.company || id.company || found.company || null,
+          jobTitle: p.jobTitle || id.jobTitle || null,
+          enrichNotes: [p.enrichNotes, ...found.notes].filter(Boolean).join('\n').slice(0, 3000),
+        },
+      })
+      await refreshProspects([p.id])
+      await updateStatus(p.id, settings)
+    } catch (err) {
+      out.errors.push(`${p.displayName}: ${(err as Error).message}`)
+      await prisma.prospect.update({ where: { id: p.id }, data: { webSearchedAt: new Date() } })
+    }
+  }
+  return out
+}
+
+// ─── 3c. Email finders (Hunter → Apollo) ─────────────────────────────────────
+// Licensed B2B data, asked once per person, only when we know who they are and where they work.
+
+export async function finderStep(deadline: number, settings: AudienceSettings, onlyIds?: string[]) {
+  const out = { asked: 0, found: 0, errors: [] as string[] }
+  if (!finderProviders().length || !settings.useFinders) return out
+  const batch = await prisma.prospect.findMany({
+    where: onlyIds ? { id: { in: onlyIds } } : {
+      finderCheckedAt: null, enrichedAt: { not: null }, relevance: { in: outreachRelevance(settings) },
+      status: { notIn: ['DO_NOT_CONTACT', 'IN_CAMPAIGN', 'READY_TO_CONTACT'] },
+      OR: [{ linkedIn: { not: null } }, { website: { not: null } }, { AND: [{ firstName: { not: null } }, { lastName: { not: null } }, { company: { not: null } }] }],
+      // people who already have a verified business address don't need credits spent on them
+      emails: { none: { status: 'VERIFIED', isFree: false } },
+    },
+    orderBy: { intentScore: 'desc' },
+    take: onlyIds ? onlyIds.length : 8,
+  })
+  for (const p of batch) {
+    if (left(deadline) < 10_000) break
+    const { found, notes } = await findBusinessEmail(p)
+    out.asked++
+    if (found) {
+      const taken = await prisma.prospectEmail.findUnique({ where: { email: found.email } })
+      if (!taken) {
+        const finderVerified = found.status === 'VERIFIED' || found.status === 'RISKY'
+        await prisma.prospectEmail.create({
+          data: {
+            prospectId: p.id, email: found.email, source: found.source, sourceUrl: found.sourceUrl || null,
+            confidence: found.confidence, ...pick(emailTraits(found.email), ['isFree', 'isRole']),
+            // The finder already checked the mailbox; otherwise the verify step does it
+            ...(finderVerified || !verifierProvider()
+              ? { status: found.status, verifyMethod: found.source, verifyDetail: found.detail.slice(0, 250), checkedAt: new Date() }
+              : { verifyDetail: found.detail.slice(0, 250) }),
+          },
+        })
+        out.found++
+      }
+    }
+    await prisma.prospect.update({
+      where: { id: p.id },
+      data: { finderCheckedAt: new Date(), enrichNotes: [p.enrichNotes, ...notes].filter(Boolean).join('\n').slice(0, 3000) },
+    })
+    await updateStatus(p.id, settings)
+  }
+  return out
+}
+
+/** Attach new addresses to a person; an address that belongs to someone else is skipped */
+async function saveEmails(prospectId: string, emails: Findings['emails']) {
+  if (!emails.length) return 0
+  const taken = new Set((await prisma.prospectEmail.findMany({ where: { email: { in: emails.map((e) => e.email) } }, select: { email: true } })).map((e) => e.email))
+  const fresh = emails.filter((e) => !taken.has(e.email))
+  if (fresh.length) {
+    await prisma.prospectEmail.createMany({
+      data: fresh.map((e) => ({ prospectId, email: e.email, source: e.source, sourceUrl: e.sourceUrl || null, ...pick(emailTraits(e.email), ['isFree', 'isRole']) })),
+      skipDuplicates: true,
+    })
+  }
+  return fresh.length
+}
+
+// ─── Re-score ────────────────────────────────────────────────────────────────
+
+/** People collected before intent scoring existed get scored the first time the pipeline runs */
+export async function rescoreLegacy(deadline: number) {
+  let n = 0
+  while (left(deadline) > 5_000) {
+    const ids = (await prisma.prospect.findMany({
+      where: { intentScore: 0, intentEvidence: { isEmpty: true }, commentCount: { gt: 0 } },
+      select: { id: true }, take: 200,
+    })).map((p) => p.id)
+    if (!ids.length) break
+    await refreshProspects(ids)
+    // Anyone still at zero has no usable comments: mark so the sweep doesn't loop on them
+    await prisma.prospect.updateMany({ where: { id: { in: ids }, intentScore: 0, intentEvidence: { isEmpty: true } }, data: { intentEvidence: ['No buying signals'] } })
+    n += ids.length
+  }
+  return n
 }
 
 // ─── 4. Verify ───────────────────────────────────────────────────────────────
@@ -419,25 +576,48 @@ export async function verifyPending(deadline: number, onlyProspectIds?: string[]
 
 // ─── 5. Status ───────────────────────────────────────────────────────────────
 
-const PUBLISHED = ['CHANNEL', 'WEBSITE', 'LINK_PAGE', 'GITHUB', 'MANUAL', 'COMMENT']
-const CONSPICUOUS = ['CHANNEL', 'WEBSITE', 'LINK_PAGE', 'GITHUB', 'MANUAL']
+// Addresses the person put out there themselves
+const PUBLISHED = ['CHANNEL', 'CHANNEL_VIDEO', 'WEBSITE', 'LINK_PAGE', 'MANUAL', 'COMMENT']
+// …published for being contacted (bio, video "business inquiries", contact page)
+const CONSPICUOUS = ['CHANNEL', 'CHANNEL_VIDEO', 'WEBSITE', 'LINK_PAGE', 'MANUAL']
 
-/** May we email this address, under the verification policy and the country's rules? */
-export function isSendable(e: Pick<ProspectEmail, 'status' | 'source' | 'verifyMethod'>, p: Pick<Prospect, 'consentSensitive' | 'country'>, s: AudienceSettings) {
+type SendableProspect = Pick<Prospect, 'consentSensitive' | 'country' | 'relevance'>
+
+/** May we email this address, under the verification policy, email-quality rule and the country's rules? */
+export function isSendable(e: Pick<ProspectEmail, 'status' | 'source' | 'verifyMethod' | 'isFree'>, p: SendableProspect, s: AudienceSettings) {
   if (e.status === 'INVALID' || e.status === 'RISKY') return false
   const verified = e.status === 'VERIFIED'
   // verifyMethod is set once the address has been checked (at least its domain accepts mail)
   const published = s.sendPolicy === 'VERIFIED_OR_PUBLISHED' && e.status === 'UNKNOWN' && !!e.verifyMethod && PUBLISHED.includes(e.source)
   if (!verified && !published) return false
+  // No "normal people" inboxes: a gmail address only when they offered it for contact and clearly want to build
+  if (s.businessEmailsOnly && e.isFree && !(CONSPICUOUS.includes(e.source) && p.relevance === 'HIGH')) return false
   if (s.strictRegions && p.consentSensitive && !CONSPICUOUS.includes(e.source)) return false
   if (s.countries.length && p.country && !s.countries.includes(p.country)) return false
   return true
 }
 
-/** Best address to use: verified personal > verified role > published */
-export function bestEmail<T extends Pick<ProspectEmail, 'status' | 'source' | 'verifyMethod' | 'isRole' | 'isFree' | 'isPrimary'>>(emails: T[], p: Pick<Prospect, 'consentSensitive' | 'country'>, s: AudienceSettings) {
-  const rank = (e: T) => (e.isPrimary ? 100 : 0) + (e.status === 'VERIFIED' ? 50 : 0) + (e.isRole ? 0 : 20) + (e.isFree ? 0 : 5) + (CONSPICUOUS.includes(e.source) ? 3 : 0)
+/** Best address to use: verified personal business > verified role > published */
+export function bestEmail<T extends Pick<ProspectEmail, 'status' | 'source' | 'verifyMethod' | 'isRole' | 'isFree' | 'isPrimary'> & { confidence?: number | null }>(emails: T[], p: SendableProspect, s: AudienceSettings) {
+  const rank = (e: T) => (e.isPrimary ? 100 : 0) + (e.status === 'VERIFIED' ? 50 : 0) + (e.isRole ? 0 : 20) + (e.isFree ? 0 : 15) +
+    (CONSPICUOUS.includes(e.source) ? 3 : 0) + Math.round((e.confidence || 0) / 20)
   return emails.filter((e) => isSendable(e, p, s)).sort((a, b) => rank(b) - rank(a))[0] || null
+}
+
+/** Why someone isn't ready yet (shown in the UI), or null when they are */
+export function readinessGap(p: SendableProspect & { identityScore: number; emails: Array<Parameters<typeof isSendable>[0] & { source: string }> }, s: AudienceSettings) {
+  const minRank = RANK[s.outreachFrom]
+  if (RANK[p.relevance] < minRank) return `Intent is ${p.relevance.toLowerCase()}; outreach starts at ${s.outreachFrom.toLowerCase()}`
+  const manual = p.emails.some((e) => e.source === 'MANUAL')
+  if (p.identityScore < s.minIdentity && !manual) return `Identity ${p.identityScore}/100 (needs ${s.minIdentity}): no confirmed site, LinkedIn or company yet`
+  const live = p.emails.filter((e) => e.status !== 'INVALID')
+  if (!live.length) return 'No email found yet'
+  if (!live.some((e) => isSendable(e, p, s))) {
+    if (s.businessEmailsOnly && live.every((e) => e.isFree)) return 'Only a personal (free-mail) address, which the business-email rule blocks'
+    if (live.every((e) => e.status !== 'VERIFIED')) return 'Email not verified yet'
+    return 'No email passes the country rules'
+  }
+  return null
 }
 
 export async function updateStatus(prospectId: string, settings?: AudienceSettings) {
@@ -450,11 +630,10 @@ export async function updateStatus(prospectId: string, settings?: AudienceSettin
   if (p.lead) status = 'IN_CAMPAIGN'
   else if (p.emails.length && !live.length) status = 'INVALID_EMAIL'
   else if (live.length) {
-    const sendable = bestEmail(live, p, s)
-    status = sendable && RANK[p.relevance] >= RANK.MEDIUM ? 'READY_TO_CONTACT'
+    status = !readinessGap(p, s) ? 'READY_TO_CONTACT'
       : live.some((e) => e.status === 'VERIFIED') ? 'EMAIL_VERIFIED' : 'EMAIL_FOUND'
   } else if (!p.enrichedAt) status = p.status === 'RESEARCHING' ? 'RESEARCHING' : 'NEW'
-  else status = p.website || p.linkedIn || p.github || p.company ? 'PROFILE_FOUND' : 'NO_CONTACT'
+  else status = p.website || p.linkedIn || p.company ? 'PROFILE_FOUND' : 'NO_CONTACT'
 
   if (status !== p.status) await prisma.prospect.update({ where: { id: p.id }, data: { status } })
   return status
@@ -490,14 +669,22 @@ export async function purgeStale(retentionDays: number) {
 
 const PURGE_KEY = 'audience_last_purge'
 
-export async function runAudiencePipeline(deadline: number, only?: 'collect' | 'review' | 'enrich' | 'verify') {
+export type PipelineStep = 'collect' | 'review' | 'enrich' | 'identity' | 'finder' | 'verify'
+
+export async function runAudiencePipeline(deadline: number, only?: PipelineStep) {
   const settings = await getAudienceSettings()
   const result: Record<string, unknown> = {}
   const share = (fraction: number) => Math.min(deadline, Date.now() + (deadline - Date.now()) * fraction)
 
-  if (!only || only === 'collect') result.collect = await collectComments(only ? deadline : share(0.4))
-  if (!only || only === 'review') result.review = await aiReview(only ? deadline : share(0.35), settings)
-  if (!only || only === 'enrich') result.enrich = await enrichProspects(only ? deadline : share(0.7), settings)
+  if (!only) {
+    const rescored = await rescoreLegacy(share(0.15))
+    if (rescored) result.rescored = rescored
+  }
+  if (!only || only === 'collect') result.collect = await collectComments(only ? deadline : share(0.35))
+  if (!only || only === 'review') result.review = await aiReview(only ? deadline : share(0.3), settings)
+  if (!only || only === 'enrich') result.enrich = await enrichProspects(only ? deadline : share(0.5), settings)
+  if (!only || only === 'identity') result.identity = await identityStep(only ? deadline : share(0.5), settings)
+  if (!only || only === 'finder') result.finder = await finderStep(only ? deadline : share(0.6), settings)
   if (!only || only === 'verify') result.verify = await verifyPending(deadline)
 
   if (!only) {
@@ -514,11 +701,14 @@ export async function runAudiencePipeline(deadline: number, only?: 'collect' | '
 /** Is there anything left for the pipeline to do? (drives the "Run" button loop) */
 export async function pipelineBacklog() {
   const s = await getAudienceSettings()
-  const [videos, review, enrich, verify] = await Promise.all([
+  const outreach = s.outreachFrom === 'HIGH' ? ['HIGH'] : ['HIGH', 'MEDIUM']
+  const [videos, review, enrich, verify, identity, finder] = await Promise.all([
     prisma.audienceVideo.count({ where: { status: { in: ['QUEUED', 'COLLECTING'] } } }),
     aiConfigured() && s.useAi ? prisma.prospect.count({ where: { aiCheckedAt: null, relevance: { not: 'SPAM' }, score: { gte: 25 }, status: { not: 'DO_NOT_CONTACT' } } }) : 0,
     prisma.prospect.count({ where: { enrichedAt: null, relevance: { in: s.enrichFrom === 'HIGH' ? ['HIGH'] : ['HIGH', 'MEDIUM'] }, status: { notIn: ['DO_NOT_CONTACT', 'IN_CAMPAIGN'] }, enrichAttempts: { lt: 3 } } }),
     prisma.prospectEmail.count({ where: { checkedAt: null, prospect: { status: { not: 'DO_NOT_CONTACT' } } } }),
+    searchProvider() && s.useWebSearch ? prisma.prospect.count({ where: { webSearchedAt: null, enrichedAt: { not: null }, relevance: { in: outreach }, website: null, linkedIn: null, status: { notIn: ['DO_NOT_CONTACT', 'IN_CAMPAIGN', 'READY_TO_CONTACT'] } } }) : 0,
+    finderProviders().length && s.useFinders ? prisma.prospect.count({ where: { finderCheckedAt: null, enrichedAt: { not: null }, relevance: { in: outreach }, status: { notIn: ['DO_NOT_CONTACT', 'IN_CAMPAIGN', 'READY_TO_CONTACT'] }, OR: [{ linkedIn: { not: null } }, { website: { not: null } }, { AND: [{ firstName: { not: null } }, { lastName: { not: null } }, { company: { not: null } }] }], emails: { none: { status: 'VERIFIED', isFree: false } } } }) : 0,
   ])
-  return { videos, review, enrich, verify, total: videos + review + enrich + verify }
+  return { videos, review, enrich, identity, finder, verify, total: videos + review + enrich + identity + finder + verify }
 }

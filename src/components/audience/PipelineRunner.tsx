@@ -4,12 +4,14 @@ import { toast } from 'sonner'
 import { Play, Square } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 
-interface Backlog { videos: number; review: number; enrich: number; verify: number; total: number }
+interface Backlog { videos: number; review: number; enrich: number; identity?: number; finder?: number; verify: number; total: number }
 interface RunResponse {
   result: {
     collect?: { newComments: number; newProspects: number; errors: string[] }
     review?: { reviewed: number; error: string }
     enrich?: { enriched: number; emailsFound: number; errors: string[] }
+    identity?: { searched: number; emailsFound: number }
+    finder?: { asked: number; found: number }
     verify?: { checked: number; verified: number }
   }
   backlog: Backlog
@@ -41,14 +43,15 @@ export default function PipelineRunner({ onProgress, backlog, size = 'sm' }: { o
         t.prospects += d.result.collect?.newProspects || 0
         t.reviewed += d.result.review?.reviewed || 0
         t.enriched += d.result.enrich?.enriched || 0
-        t.emails += d.result.enrich?.emailsFound || 0
+        t.emails += (d.result.enrich?.emailsFound || 0) + (d.result.identity?.emailsFound || 0) + (d.result.finder?.found || 0)
         t.verified += d.result.verify?.verified || 0
         setLine(`${t.comments} comments · ${t.prospects} people · ${t.reviewed} reviewed · ${t.enriched} researched · ${t.emails} emails · ${t.verified} verified — ${d.backlog.total} left`)
         onProgress?.()
         const errs = [...(d.result.collect?.errors || []), d.result.review?.error || ''].filter(Boolean)
         if (errs.some((e) => /quota|YOUTUBE_API_KEY/i.test(e))) { toast.error(errs[0]); break }
         if (d.result.review?.error) toast.warning(d.result.review.error)
-        const progressed = (d.result.collect?.newComments || 0) + (d.result.review?.reviewed || 0) + (d.result.enrich?.enriched || 0) + (d.result.verify?.checked || 0)
+        const progressed = (d.result.collect?.newComments || 0) + (d.result.review?.reviewed || 0) + (d.result.enrich?.enriched || 0) +
+          (d.result.identity?.searched || 0) + (d.result.finder?.asked || 0) + (d.result.verify?.checked || 0)
         if (!d.backlog.total || !progressed) break
       }
       toast.success('Pipeline run finished')

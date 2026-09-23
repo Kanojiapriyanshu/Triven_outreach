@@ -3,6 +3,8 @@ import { quotaUsage, youtubeConfigured } from './youtube'
 import { aiConfigured } from './ai'
 import { verifierProvider } from './verify'
 import { pipelineBacklog } from './pipeline'
+import { searchProvider } from './identity'
+import { finderProviders } from './finders'
 
 const n = (x: unknown) => Number(x || 0)
 
@@ -73,7 +75,8 @@ export async function audienceOverview() {
       youtube: youtubeConfigured(),
       ai: aiConfigured(),
       verifier: verifierProvider(),
-      github: !!process.env.GITHUB_TOKEN,
+      search: searchProvider(),
+      finders: finderProviders(),
     },
     quota,
     backlog,

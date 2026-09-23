@@ -28,7 +28,7 @@ export async function GET(req: NextRequest) {
     },
   })
 
-  const header = ['Name', 'YouTube profile', 'Source channel', 'Source video', 'Comment', 'Comment topic', 'Interest category', 'Persona', 'Relevance', 'Score',
+  const header = ['Name', 'YouTube profile', 'Source channel', 'Source video', 'Comment', 'Comment topic', 'Interest category', 'Persona', 'Relevance', 'Intent score', 'Intent evidence', 'Identity score', 'Their channel',
     'Company', 'Job title', 'LinkedIn', 'Website', 'Email', 'Email status', 'Email source', 'Other emails', 'Location', 'Country', 'Why selected', 'Status', 'Campaign', 'First seen']
   const lines = [header.join(',')]
   for (const p of rows) {
@@ -44,7 +44,10 @@ export async function GET(req: NextRequest) {
       interestLabel(p.interestCategory),
       personaLabel(p.persona),
       p.relevance,
-      p.score,
+      p.intentScore,
+      p.intentEvidence.filter((e) => e !== 'No buying signals').join('; '),
+      p.identityScore,
+      p.ownChannelSummary,
       p.company, p.jobTitle, p.linkedIn, p.website,
       primary?.email, primary?.status, primary?.source,
       p.emails.filter((e) => e !== primary).map((e) => `${e.email} (${e.status.toLowerCase()})`).join('; '),

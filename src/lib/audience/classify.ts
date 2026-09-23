@@ -140,6 +140,92 @@ export function relevanceFor(score: number): Relevance {
   return score >= 55 ? 'HIGH' : score >= 30 ? 'MEDIUM' : 'LOW'
 }
 
+// ─── Person-level intent & identity ──────────────────────────────────────────
+// A person is worth contacting when there's evidence they build or buy, not just that they watched.
+
+const EVIDENCE: Record<string, string> = {
+  business: 'Talks about their own business',
+  agency: 'Works for clients / runs an agency',
+  founder: 'Founder or building a startup',
+  building_now: 'Already building something',
+  consultant: 'Consultant',
+  freelance: 'Freelancer',
+  developer: 'Writes code (APIs, frameworks)',
+  build_intent: 'Asks how to implement it',
+  money: 'Talks pricing / revenue / clients paying',
+  pain: 'Has a concrete problem to solve',
+  tech_job: 'Works in tech',
+}
+const STRONG = ['business', 'agency', 'founder', 'building_now', 'consultant']
+const BIO_STRONG = ['FOUNDER', 'AGENCY', 'CONSULTANT', 'BUSINESS_OWNER', 'DEVELOPER']
+
+export interface IntentInput {
+  comments: Array<{ score: number; signals: string[]; relevance: string; channel: string; video: string }>
+  bioPersona?: string | null
+  bioTitle?: string | null
+  ownChannelAi?: boolean
+  ownChannelSummary?: string | null
+  hasWebsite?: boolean
+}
+
+/** 0-100 intent score, relevance and the evidence behind it */
+export function computeIntent(i: IntentInput): { intent: number; relevance: Relevance; evidence: string[] } {
+  const real = i.comments.filter((c) => c.relevance !== 'SPAM')
+  if (!real.length) return { intent: 0, relevance: 'SPAM', evidence: ['Only spam comments'] }
+  const best = [...real].sort((a, b) => b.score - a.score)[0]
+  const signals = new Set(real.flatMap((c) => c.signals))
+  const videos = new Set(real.map((c) => c.video)).size
+  const channels = new Set(real.map((c) => c.channel)).size
+
+  const strongComment = STRONG.some((s) => signals.has(s)) || (signals.has('developer') && (signals.has('build_intent') || signals.has('pain')))
+  const strongBio = !!i.bioPersona && BIO_STRONG.includes(i.bioPersona)
+  let intent = Math.min(45, Math.round(best.score * 0.55))
+  if (strongComment) intent += 15
+  if (['money', 'build_intent', 'pain'].some((s) => signals.has(s))) intent += 8
+  intent += Math.min(12, (real.length - 1) * 6)
+  if (channels >= 2) intent += 8
+  if (i.ownChannelAi) intent += 15
+  if (strongBio) intent += 10
+  if (i.hasWebsite) intent += 5
+  intent = Math.max(0, Math.min(100, intent))
+
+  const evidence = [...signals].filter((s) => EVIDENCE[s]).sort((a, b) => Number(STRONG.includes(b)) - Number(STRONG.includes(a))).map((s) => EVIDENCE[s])
+  if (real.length > 1) evidence.push(`${real.length} comments on ${videos} video${videos === 1 ? '' : 's'}${channels > 1 ? ` across ${channels} channels` : ''}`)
+  if (i.ownChannelAi) evidence.push(`Own channel: ${i.ownChannelSummary || 'publishes AI/automation videos'}`)
+  if (i.bioPersona) evidence.push(`Bio: ${i.bioTitle || i.bioPersona.toLowerCase().replace('_', ' ')}`)
+
+  const strong = strongComment || strongBio || !!i.ownChannelAi
+  const relevance: Relevance = intent >= 60 && strong ? 'HIGH' : intent >= 35 ? 'MEDIUM' : 'LOW'
+  return { intent, relevance, evidence }
+}
+
+/** 0-100: how sure we are who this person is (and so whose inbox we'd write to) */
+export function computeIdentity(p: { website?: string | null; linkedIn?: string | null; company?: string | null; firstName?: string | null; lastName?: string | null; videoCount?: number }) {
+  let s = 0
+  if (p.website) s += 40
+  if (p.linkedIn) s += 20
+  if (p.company) s += 15
+  if (p.firstName && p.lastName) s += 15
+  else if (p.firstName) s += 5
+  if ((p.videoCount || 0) > 0) s += 10
+  return Math.min(100, s)
+}
+
+const AI_CONTENT = /\b(ai|a\.i\.|agents?|automat\w*|n8n|make\.com|zapier|chatgpt|gpt|llm|claude|gemini|no.?code|voice ?(ai|agent)|chatbot|workflow|saas|langchain|vapi|retell)\b/i
+
+/** Is their own channel about AI/automation? From their latest upload titles. */
+export function ownChannelProfile(titles: string[]) {
+  if (!titles.length) return { ai: false, summary: null as string | null }
+  const ai = titles.filter((t) => AI_CONTENT.test(t)).length
+  const toolRe = new RegExp(TOOL_RE.source, 'gi')
+  const tools = [...new Set(titles.flatMap((t) => [...t.matchAll(toolRe)].map((m) => TOOL_NAMES[m[1].toLowerCase()] || m[1])))].slice(0, 3)
+  const isAi = ai >= Math.max(2, Math.ceil(titles.length * 0.4))
+  const summary = isAi
+    ? `${ai} of their last ${titles.length} videos are about AI/automation${tools.length ? ` (${tools.join(', ')})` : ''}`
+    : `${titles.length} recent videos, mostly not about AI`
+  return { ai: isAi, summary }
+}
+
 /** Score one comment. `videoInterest` is the topic of the video it was left on. */
 export function classifyComment(text: string, ctx: { likeCount?: number; videoInterest?: string | null; authorName?: string } = {}): CommentVerdict {
   const t = text.trim()

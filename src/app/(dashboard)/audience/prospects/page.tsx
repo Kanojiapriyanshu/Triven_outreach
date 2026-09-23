@@ -26,19 +26,22 @@ interface Row {
   country: string | null; company: string | null; jobTitle: string | null; website: string | null; linkedIn: string | null; github: string | null
   persona: string | null; interestCategory: string | null; relevance: string; score: number; topic: string | null; status: string
   commentCount: number; consentSensitive: boolean; enrichedAt: string | null
-  emails: Array<{ id: string; email: string; status: string; isPrimary: boolean }>
+  intentScore: number; intentEvidence: string[]; identityScore: number; ownChannelAi: boolean
+  emails: Array<{ id: string; email: string; status: string; isPrimary: boolean; isFree: boolean }>
   lead: { id: string; status: string; campaign: { name: string } | null } | null
   comments: Array<{ text: string; video: { title: string; channel: { title: string } } }>
 }
 interface Page { data: Row[]; total: number; page: number; totalPages: number }
 
-const FILTER_KEYS = ['q', 'relevance', 'persona', 'interest', 'status', 'email', 'region', 'channelId', 'videoId', 'sort', 'hideSpam'] as const
+const FILTER_KEYS = ['q', 'relevance', 'persona', 'interest', 'status', 'email', 'region', 'channelId', 'videoId', 'sort', 'hideSpam', 'identified', 'minIntent', 'ownChannelAi'] as const
 
 const QUICK: Array<{ label: string; params: Record<string, string> }> = [
   { label: 'Ready to contact', params: { status: 'READY_TO_CONTACT' } },
-  { label: 'High relevance', params: { relevance: 'HIGH' } },
-  { label: 'Verified email', params: { email: 'verified' } },
-  { label: 'Needs an email', params: { relevance: 'HIGH,MEDIUM', status: 'PROFILE_FOUND,NO_CONTACT' } },
+  { label: 'Strong buying intent', params: { relevance: 'HIGH' } },
+  { label: 'Business email', params: { email: 'business' } },
+  { label: 'Identified (site / LinkedIn / company)', params: { identified: 'true', relevance: 'HIGH' } },
+  { label: 'Builders with their own AI channel', params: { ownChannelAi: 'true' } },
+  { label: 'High intent, not identified yet', params: { relevance: 'HIGH', identified: 'false' } },
   { label: 'In campaigns', params: { status: 'IN_CAMPAIGN' } },
 ]
 
@@ -80,7 +83,7 @@ function ProspectsInner() {
       const res = await fetch('/api/audience/prospects/bulk', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action, ...target, ...extra }) })
       const d = await res.json().catch(() => ({}))
       if (!res.ok) return toast.error(d.error || 'Failed')
-      if (action === 'enrich') toast.success(`Researched ${d.enriched}, found ${d.emailsFound} email${d.emailsFound === 1 ? '' : 's'}${d.queued ? `. ${d.queued} more are queued for the background worker.` : ''}`)
+      if (action === 'enrich') toast.success(`Researched ${d.enriched}: ${d.websites || 0} site${d.websites === 1 ? '' : 's'} and ${d.linkedIn || 0} LinkedIn found by search, ${d.emailsFound} email${d.emailsFound === 1 ? '' : 's'}, ${d.verified || 0} verified${d.queued ? `. ${d.queued} more are queued for the background worker.` : ''}`)
       else if (action === 'verify') toast.success(`Checked ${d.checked}: ${d.verified} verified, ${d.invalid} invalid`)
       else toast.success(`Done (${d.count ?? ''})`)
       setSelected(new Set()); setAllMatching(false)
@@ -118,14 +121,14 @@ function ProspectsInner() {
             <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-slate-400" />
             <Input value={localQ} onChange={(e) => setLocalQ(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && setFilter({ q: localQ || null })} placeholder="Name, company, email or topic" className="pl-8" />
           </div>
-          <Sel value={sp.get('relevance') || ''} onChange={(v) => setFilter({ relevance: v })} options={[['', 'Any relevance'], ['HIGH', 'High'], ['MEDIUM', 'Medium'], ['HIGH,MEDIUM', 'High + medium'], ['LOW', 'Low'], ['SPAM', 'Spam']]} />
+          <Sel value={sp.get('relevance') || ''} onChange={(v) => setFilter({ relevance: v })} options={[['', 'Any intent'], ['HIGH', 'High intent'], ['MEDIUM', 'Medium'], ['HIGH,MEDIUM', 'High + medium'], ['LOW', 'Low'], ['SPAM', 'Spam']]} />
           <Sel value={sp.get('persona') || ''} onChange={(v) => setFilter({ persona: v })} options={[['', 'Any persona'], ...Object.entries(PERSONAS).map(([k, v]) => [k, v.label] as [string, string])]} />
           <Sel value={sp.get('interest') || ''} onChange={(v) => setFilter({ interest: v })} options={[['', 'Any interest'], ...Object.entries(INTERESTS).map(([k, v]) => [k, v.label] as [string, string])]} />
           <Sel value={sp.get('status') || ''} onChange={(v) => setFilter({ status: v })} options={[['', 'Any status'], ...Object.entries(PROSPECT_STATUSES) as Array<[string, string]>]} />
-          <Sel value={sp.get('email') || ''} onChange={(v) => setFilter({ email: v })} options={[['', 'Any email'], ['verified', 'Verified email'], ['any', 'Has an email'], ['none', 'No email']]} />
+          <Sel value={sp.get('email') || ''} onChange={(v) => setFilter({ email: v })} options={[['', 'Any email'], ['business', 'Verified business email'], ['verified', 'Any verified email'], ['any', 'Has an email'], ['none', 'No email']]} />
           <Sel value={sp.get('region') || ''} onChange={(v) => setFilter({ region: v })} options={[['', 'Any region'], ...Object.entries(REGIONS) as Array<[string, string]>]} />
           <Sel value={sp.get('channelId') || ''} onChange={(v) => setFilter({ channelId: v, videoId: null })} options={[['', 'Any source channel'], ...(Array.isArray(channels) ? channels : []).map((c) => [c.id, c.title] as [string, string])]} />
-          <Sel value={sp.get('sort') || ''} onChange={(v) => setFilter({ sort: v })} options={[['', 'Best first'], ['recent', 'Most recent'], ['comments', 'Most comments'], ['subscribers', 'Biggest channel']]} />
+          <Sel value={sp.get('sort') || ''} onChange={(v) => setFilter({ sort: v })} options={[['', 'Highest intent'], ['recent', 'Most recent'], ['comments', 'Most comments'], ['subscribers', 'Biggest channel']]} />
         </div>
         {sp.get('videoId') && <p className="text-xs text-slate-500">Showing people from one video. <button onClick={() => setFilter({ videoId: null })} className="text-indigo-600 underline">Show all</button></p>}
 
@@ -139,7 +142,7 @@ function ProspectsInner() {
             <div className="flex flex-wrap items-center gap-2">
               <span className="text-sm font-medium text-slate-700">{count.toLocaleString('en-US')} selected</span>
               <Button size="sm" onClick={() => setPush({ ...target, count })}><Send className="h-3.5 w-3.5" />Add to campaign</Button>
-              <Button size="sm" variant="outline" onClick={() => bulk('enrich')} loading={busy === 'enrich'} title="Up to 12 right now; the rest are queued"><RefreshCw className="h-3.5 w-3.5" />Research</Button>
+              <Button size="sm" variant="outline" onClick={() => bulk('enrich')} loading={busy === 'enrich'} title="Own channel, website, web search, email finders, verification. Up to 6 right now; the rest are queued"><RefreshCw className="h-3.5 w-3.5" />Research</Button>
               <Button size="sm" variant="outline" onClick={() => bulk('verify')} loading={busy === 'verify'}><MailCheck className="h-3.5 w-3.5" />Verify emails</Button>
               <select onChange={(e) => { if (e.target.value) bulk('setRelevance', { relevance: e.target.value }); e.target.value = '' }} className="h-7 rounded-lg border border-slate-300 px-2 text-xs" defaultValue="">
                 <option value="" disabled>Set relevance…</option>
@@ -162,7 +165,7 @@ function ProspectsInner() {
                   <input type="checkbox" checked={pageAll} onChange={() => { setAllMatching(false); setSelected(pageAll ? new Set() : new Set(rows.map((r) => r.id))) }} />
                 </th>
                 <th className="text-left px-3 py-3 font-semibold">Person</th>
-                <th className="text-left px-3 py-3 font-semibold">Relevance</th>
+                <th className="text-left px-3 py-3 font-semibold">Intent</th>
                 <th className="text-left px-3 py-3 font-semibold min-w-[320px]">What they said</th>
                 <th className="text-left px-3 py-3 font-semibold">Email</th>
                 <th className="text-left px-3 py-3 font-semibold">Status</th>
@@ -202,17 +205,28 @@ function ProspectsInner() {
                       </div>
                     </td>
                     <td className="px-3 py-3">
-                      <RelevanceBadge value={r.relevance} score={r.score} />
+                      <RelevanceBadge value={r.relevance} score={r.intentScore} />
                       <p className="text-[11px] text-slate-500 mt-1">{interestLabel(r.interestCategory)}</p>
+                      <p className={`text-[10px] mt-0.5 ${r.identityScore >= 40 ? 'text-emerald-700' : 'text-slate-400'}`} title="How sure we are who they are">identity {r.identityScore}</p>
                     </td>
                     <td className="px-3 py-3">
                       {r.topic && <p className="text-xs font-medium text-slate-700">about {r.topic}</p>}
+                      {r.intentEvidence.filter((e) => e !== 'No buying signals').length > 0 && (
+                        <div className="flex flex-wrap gap-1 my-1">
+                          {r.intentEvidence.filter((e) => e !== 'No buying signals').slice(0, 3).map((e) => <span key={e} className="rounded bg-emerald-50 px-1.5 py-0.5 text-[10px] text-emerald-800">{e}</span>)}
+                        </div>
+                      )}
                       {best && <p className="text-xs text-slate-500 line-clamp-2">&ldquo;{best.text}&rdquo;</p>}
                       {best && <p className="text-[10px] text-slate-400 truncate max-w-[420px]">{best.video.channel.title} · {best.video.title}</p>}
                     </td>
                     <td className="px-3 py-3">
                       <div className="flex flex-col gap-1 max-w-[220px]">
-                        {r.emails.slice(0, 2).map((e) => <EmailChip key={e.id} email={e.email} status={e.status} primary={e.isPrimary} />)}
+                        {[...r.emails].sort((a, b) => Number(a.isFree) - Number(b.isFree)).slice(0, 2).map((e) => (
+                          <div key={e.id} className="flex items-center gap-1">
+                            <EmailChip email={e.email} status={e.status} primary={e.isPrimary} />
+                            <span className={`text-[9px] uppercase ${e.isFree ? 'text-amber-600' : 'text-emerald-700'}`}>{e.isFree ? 'personal' : 'business'}</span>
+                          </div>
+                        ))}
                         {r.emails.length > 2 && <span className="text-[10px] text-slate-400">+{r.emails.length - 2} more</span>}
                         {!r.emails.length && <span className="text-[11px] text-slate-400">{r.enrichedAt ? 'none found' : 'not researched'}</span>}
                       </div>

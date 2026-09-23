@@ -1,11 +1,11 @@
 // Contact discovery from public sources the person published themselves: their YouTube
-// channel bio, their comment, their own website, their link-in-bio page and their public
-// GitHub profile. No logins, no private data, robots.txt respected.
+// channel bio and video descriptions (via the API), their comment, their own website and
+// their link-in-bio page. No logins, no private data, robots.txt respected.
 import { isUsableEmail, normalizeEmail } from './verify'
 import { profileHints } from './classify'
 import { countryFromDomain } from './taxonomy'
 
-export type EmailSource = 'CHANNEL' | 'COMMENT' | 'WEBSITE' | 'GITHUB' | 'LINK_PAGE' | 'PATTERN' | 'MANUAL'
+export type EmailSource = 'CHANNEL' | 'CHANNEL_VIDEO' | 'COMMENT' | 'WEBSITE' | 'LINK_PAGE' | 'HUNTER' | 'APOLLO' | 'PATTERN' | 'MANUAL'
 
 export interface Findings {
   emails: Array<{ email: string; source: EmailSource; sourceUrl?: string }>
@@ -138,7 +138,7 @@ function decodeCfEmail(hex: string) {
   return out
 }
 
-function htmlToText(html: string) {
+export function htmlToText(html: string) {
   return html
     .replace(/<script[\s\S]*?<\/script>/gi, ' ')
     .replace(/<style[\s\S]*?<\/style>/gi, ' ')
@@ -231,29 +231,8 @@ export async function readLinkPage(url: string, f: Findings) {
   f.notes.push(`${hostOf(url)}: ${facts.emails.length} address${facts.emails.length === 1 ? '' : 'es'}`)
 }
 
-/** Public GitHub profile (developers often list email, company and site) */
-export async function readGitHub(username: string, f: Findings) {
-  const headers: Record<string, string> = { 'User-Agent': 'triven-crm', Accept: 'application/vnd.github+json' }
-  if (process.env.GITHUB_TOKEN) headers.Authorization = `Bearer ${process.env.GITHUB_TOKEN}`
-  try {
-    const res = await fetch(`https://api.github.com/users/${encodeURIComponent(username)}`, { headers, signal: AbortSignal.timeout(8_000), cache: 'no-store' })
-    if (!res.ok) {
-      f.notes.push(`GitHub ${username}: ${res.status === 403 ? 'rate limited (add GITHUB_TOKEN)' : `HTTP ${res.status}`}`)
-      return
-    }
-    const u = await res.json() as { name?: string; company?: string; blog?: string; location?: string; email?: string; bio?: string; twitter_username?: string }
-    if (u.email && isUsableEmail(normalizeEmail(u.email))) f.emails.push({ email: normalizeEmail(u.email), source: 'GITHUB', sourceUrl: `https://github.com/${username}` })
-    if (u.name) f.fullName ||= u.name
-    if (u.company) f.company ||= u.company.replace(/^@/, '').trim()
-    if (u.location) f.location ||= u.location
-    if (u.bio) f.bio ||= u.bio
-    if (u.twitter_username) f.twitter ||= `https://x.com/${u.twitter_username}`
-    if (u.blog) classifyLinks([u.blog.startsWith('http') ? u.blog : `https://${u.blog}`], f)
-    f.notes.push(`GitHub ${username}: profile read${u.email ? ', public email' : ''}`)
-  } catch {
-    f.notes.push(`GitHub ${username}: not reachable`)
-  }
-}
+// GitHub is deliberately not used: GitHub's Acceptable Use Policies (section 7) forbid using
+// GitHub data, via the API or otherwise, for unsolicited email. A github.com link is kept for display only.
 
 /** Likely addresses for a person at their own domain; only worth anything once verified */
 export function patternGuesses(firstName: string, lastName: string | undefined, domain: string) {
@@ -265,22 +244,23 @@ export function patternGuesses(firstName: string, lastName: string | undefined, 
   return out
 }
 
-/** Everything we can learn from text the person wrote (bio + comments), plus their links */
-export async function discover(opts: { bio: string; comments: string[]; deadline: number }): Promise<Findings> {
+/** Everything we can learn from text the person wrote (bio, their own video descriptions, comments), plus their links */
+export async function discover(opts: { bio: string; comments: string[]; ownVideos?: Array<{ id: string; text: string }>; deadline: number }): Promise<Findings> {
   const f: Findings = { emails: [], otherLinks: [], notes: [] }
   const hints = profileHints(opts.bio)
   if (hints.jobTitle) f.jobTitle = hints.jobTitle
   if (hints.company) f.company = hints.company
   for (const email of extractEmails(opts.bio)) f.emails.push({ email, source: 'CHANNEL' })
+  // Creators put "business inquiries: …" in their own video descriptions: an address offered for contact
+  for (const v of opts.ownVideos || []) for (const email of extractEmails(v.text)) f.emails.push({ email, source: 'CHANNEL_VIDEO', sourceUrl: `https://www.youtube.com/watch?v=${v.id}` })
   for (const c of opts.comments) for (const email of extractEmails(c)) f.emails.push({ email, source: 'COMMENT' })
-  classifyLinks([...extractUrls(opts.bio), ...opts.comments.flatMap(extractUrls)], f)
+  classifyLinks([...extractUrls(opts.bio), ...(opts.ownVideos || []).flatMap((v) => extractUrls(v.text)).slice(0, 40), ...opts.comments.flatMap(extractUrls)], f)
 
   const timeLeft = () => opts.deadline - Date.now()
   for (const lp of f.otherLinks.filter((l) => LINK_PAGES.test(hostOf(l))).slice(0, 2)) {
     if (timeLeft() < 10_000) break
     await readLinkPage(lp, f)
   }
-  if (f.github && timeLeft() > 8_000) await readGitHub(f.github, f)
   if (f.website && timeLeft() > 12_000) await crawlWebsite(f.website, f)
   f.country = countryFromDomain(f.website) || undefined
 
