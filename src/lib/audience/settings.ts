@@ -27,6 +27,8 @@ export interface AudienceSettings {
   useWebSearch: boolean
   /** Ask email-finder APIs (Hunter / Apollo) once identity is known */
   useFinders: boolean
+  /** Hunter credits to always leave untouched (for your own manual lookups) */
+  hunterReserve: number
 }
 
 export const DEFAULT_AUDIENCE_SETTINGS: AudienceSettings = {
@@ -43,6 +45,7 @@ export const DEFAULT_AUDIENCE_SETTINGS: AudienceSettings = {
   minIdentity: 40,
   useWebSearch: true,
   useFinders: true,
+  hunterReserve: 5,
 }
 
 const KEY = 'audience'

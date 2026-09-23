@@ -5,6 +5,7 @@ import { verifierProvider } from './verify'
 import { pipelineBacklog } from './pipeline'
 import { searchProvider } from './identity'
 import { finderProviders } from './finders'
+import { hunterAccount } from './hunter'
 
 const n = (x: unknown) => Number(x || 0)
 
@@ -68,7 +69,7 @@ export async function audienceOverview() {
     LIMIT 100`
 
   const pct = (a: number, b: number) => (b ? Math.round((a / b) * 1000) / 10 : null)
-  const [quota, backlog] = await Promise.all([quotaUsage(), pipelineBacklog()])
+  const [quota, backlog, hunter] = await Promise.all([quotaUsage(), pipelineBacklog(), hunterAccount().catch(() => null)])
 
   return {
     config: {
@@ -78,6 +79,7 @@ export async function audienceOverview() {
       search: searchProvider(),
       finders: finderProviders(),
     },
+    hunter,
     quota,
     backlog,
     funnel: { comments, prospects, relevant, high, enriched, withEmail, verified, ready, inCampaign, contacted, followUps, replied, interested, meetings, won },

@@ -46,14 +46,15 @@ const PROVIDER_ENV: Record<Provider, string> = {
   NEVERBOUNCE: 'NEVERBOUNCE_API_KEY',
   MILLIONVERIFIER: 'MILLIONVERIFIER_API_KEY',
   REOON: 'REOON_API_KEY',
-  // last: dedicated verifiers first; Hunter's key doubles as a verifier when it's the only one
+  // Only when chosen with EMAIL_VERIFIER=HUNTER: on Hunter's free plan every check costs half a
+  // credit, and those credits are worth more for finding emails
   HUNTER: 'HUNTER_API_KEY',
 }
 
 export function verifierProvider(): Provider | null {
   const named = process.env.EMAIL_VERIFIER?.toUpperCase() as Provider | undefined
   if (named && PROVIDER_ENV[named] && process.env[PROVIDER_ENV[named]]) return named
-  return (Object.keys(PROVIDER_ENV) as Provider[]).find((p) => process.env[PROVIDER_ENV[p]]) || null
+  return (Object.keys(PROVIDER_ENV) as Provider[]).find((p) => p !== 'HUNTER' && process.env[PROVIDER_ENV[p]]) || null
 }
 
 interface Verdict { status: EmailStatus; method: string; detail: string }

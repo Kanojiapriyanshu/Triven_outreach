@@ -16,6 +16,7 @@ import { commentThreadsPage, getChannels, getVideos, latestUploadIds, YouTubeErr
 import { discover, hostOf, patternGuesses, SHARED_HOSTS, crawlWebsite, type Findings } from './enrich'
 import { resolveIdentity, searchProvider } from './identity'
 import { findBusinessEmail, finderProviders } from './finders'
+import { hunterAccount, hunterConfigured, hunterEnrich, HunterLimitError } from './hunter'
 import { emailTraits, verifierProvider, verifyEmail, FREE_MAIL } from './verify'
 import { aiConfigured, reviewProspects, describeAiError } from './ai'
 import { CONSENT_SENSITIVE, regionOf } from './taxonomy'
@@ -447,48 +448,129 @@ export async function identityStep(deadline: number, settings: AudienceSettings,
 
 // ─── 3c. Email finders (Hunter → Apollo) ─────────────────────────────────────
 // Licensed B2B data, asked once per person, only when we know who they are and where they work.
+// Two jobs:
+//   find    – high-intent person with a known identity but no business email → find it
+//   enrich  – high-intent person with a business email but unclear identity → Hunter tells us
+//             whose address it is (name, title, company, LinkedIn), which can make them ready
+// Hunter credits are checked for free first and never used below the reserve.
 
 export async function finderStep(deadline: number, settings: AudienceSettings, onlyIds?: string[]) {
-  const out = { asked: 0, found: 0, errors: [] as string[] }
+  const out = { asked: 0, found: 0, enriched: 0, hunterCredits: null as number | null, stoppedAtReserve: false, errors: [] as string[] }
   if (!finderProviders().length || !settings.useFinders) return out
+
+  let credits = Infinity
+  if (hunterConfigured()) {
+    try {
+      const acc = await hunterAccount()
+      credits = acc?.remaining ?? 0
+      out.hunterCredits = credits
+    } catch (err) {
+      out.errors.push(`Hunter account: ${(err as Error).message}`)
+      credits = 0
+    }
+  }
+  const hunterLeft = () => credits > settings.hunterReserve
+  if (!hunterLeft() && !process.env.APOLLO_API_KEY) {
+    out.stoppedAtReserve = true
+    return out
+  }
+
+  const base = onlyIds ? { id: { in: onlyIds } } : {
+    finderCheckedAt: null, enrichedAt: { not: null }, relevance: { in: outreachRelevance(settings) },
+    status: { notIn: ['DO_NOT_CONTACT', 'IN_CAMPAIGN', 'READY_TO_CONTACT'] },
+  }
   const batch = await prisma.prospect.findMany({
-    where: onlyIds ? { id: { in: onlyIds } } : {
-      finderCheckedAt: null, enrichedAt: { not: null }, relevance: { in: outreachRelevance(settings) },
-      status: { notIn: ['DO_NOT_CONTACT', 'IN_CAMPAIGN', 'READY_TO_CONTACT'] },
-      OR: [{ linkedIn: { not: null } }, { website: { not: null } }, { AND: [{ firstName: { not: null } }, { lastName: { not: null } }, { company: { not: null } }] }],
-      // people who already have a verified business address don't need credits spent on them
-      emails: { none: { status: 'VERIFIED', isFree: false } },
+    where: onlyIds ? base : {
+      ...base,
+      OR: [
+        // find: identity known, no verified business email yet
+        {
+          AND: [
+            { OR: [{ linkedIn: { not: null } }, { website: { not: null } }, { AND: [{ firstName: { not: null } }, { lastName: { not: null } }, { company: { not: null } }] }] },
+            { emails: { none: { status: 'VERIFIED', isFree: false } } },
+          ],
+        },
+        // enrich: has a business address but we don't know enough about who owns it
+        { AND: [{ identityScore: { lt: settings.minIdentity } }, { emails: { some: { isFree: false, status: { not: 'INVALID' } } } }] },
+      ],
     },
+    include: { emails: true },
     orderBy: { intentScore: 'desc' },
     take: onlyIds ? onlyIds.length : 8,
   })
+
   for (const p of batch) {
     if (left(deadline) < 10_000) break
-    const { found, notes } = await findBusinessEmail(p)
-    out.asked++
-    if (found) {
-      const taken = await prisma.prospectEmail.findUnique({ where: { email: found.email } })
-      if (!taken) {
-        const finderVerified = found.status === 'VERIFIED' || found.status === 'RISKY'
-        await prisma.prospectEmail.create({
-          data: {
-            prospectId: p.id, email: found.email, source: found.source, sourceUrl: found.sourceUrl || null,
-            confidence: found.confidence, ...pick(emailTraits(found.email), ['isFree', 'isRole']),
-            // The finder already checked the mailbox; otherwise the verify step does it
-            ...(finderVerified || !verifierProvider()
-              ? { status: found.status, verifyMethod: found.source, verifyDetail: found.detail.slice(0, 250), checkedAt: new Date() }
-              : { verifyDetail: found.detail.slice(0, 250) }),
-          },
-        })
-        out.found++
+    const notes: string[] = []
+    const businessEmail = p.emails.find((e) => !e.isFree && e.status !== 'INVALID')
+
+    // enrich: whose address is this?
+    if (businessEmail && p.identityScore < settings.minIdentity && hunterConfigured() && hunterLeft()) {
+      try {
+        const who = await hunterEnrich(businessEmail.email)
+        credits -= 1
+        if (who) {
+          const website = p.website || (who.companyDomain ? `https://${who.companyDomain}` : null)
+          await prisma.prospect.update({
+            where: { id: p.id },
+            data: {
+              firstName: p.firstName || who.firstName || null,
+              lastName: p.lastName || who.lastName || null,
+              jobTitle: p.jobTitle || who.title || null,
+              company: p.company || who.companyName || null,
+              website,
+              linkedIn: p.linkedIn || who.linkedIn || null,
+              twitter: p.twitter || who.twitter || null,
+              location: p.location || who.city || null,
+              ...(!p.country && who.country ? { country: who.country.toUpperCase(), region: regionOf(who.country), consentSensitive: CONSENT_SENSITIVE.has(who.country.toUpperCase()) } : {}),
+            },
+          })
+          Object.assign(p, { website, firstName: p.firstName || who.firstName, lastName: p.lastName || who.lastName, company: p.company || who.companyName, linkedIn: p.linkedIn || who.linkedIn })
+          out.enriched++
+          notes.push(`Hunter enrichment for ${businessEmail.email}: ${[who.firstName, who.lastName].filter(Boolean).join(' ') || 'no name'}${who.title ? `, ${who.title}` : ''}${who.companyName ? ` at ${who.companyName}` : ''}`)
+        } else notes.push(`Hunter enrichment: nothing known about ${businessEmail.email}`)
+      } catch (err) {
+        if (err instanceof HunterLimitError) credits = 0
+        notes.push(`Hunter enrichment: ${(err as Error).message}`)
       }
     }
+
+    // find: a business email for someone we can identify
+    const hasVerifiedBusiness = p.emails.some((e) => e.status === 'VERIFIED' && !e.isFree)
+    if (!hasVerifiedBusiness && (hunterLeft() || process.env.APOLLO_API_KEY)) {
+      const { found, notes: fNotes, outOfCredits } = await findBusinessEmail(p, { hunter: hunterLeft() })
+      notes.push(...fNotes)
+      if (outOfCredits) credits = 0
+      out.asked++
+      if (found) {
+        if (found.source === 'HUNTER') credits -= 1
+        const taken = await prisma.prospectEmail.findUnique({ where: { email: found.email } })
+        if (!taken) {
+          const finderChecked = found.status !== 'UNKNOWN'
+          await prisma.prospectEmail.create({
+            data: {
+              prospectId: p.id, email: found.email, source: found.source, sourceUrl: found.sourceUrl || null,
+              confidence: found.confidence, ...pick(emailTraits(found.email), ['isFree', 'isRole']),
+              // The finder already checked the mailbox; otherwise the verify step does it
+              ...(finderChecked || !verifierProvider()
+                ? { status: found.status, verifyMethod: found.source, verifyDetail: found.detail.slice(0, 250), checkedAt: new Date() }
+                : { verifyDetail: found.detail.slice(0, 250) }),
+            },
+          })
+          out.found++
+        }
+      }
+    }
+
     await prisma.prospect.update({
       where: { id: p.id },
-      data: { finderCheckedAt: new Date(), enrichNotes: [p.enrichNotes, ...notes].filter(Boolean).join('\n').slice(0, 3000) },
+      data: { finderCheckedAt: new Date(), enrichNotes: [p.enrichNotes, ...notes].filter(Boolean).join('\n').slice(-3000) },
     })
+    await refreshProspects([p.id])
     await updateStatus(p.id, settings)
+    if (!hunterLeft() && !process.env.APOLLO_API_KEY) { out.stoppedAtReserve = true; break }
   }
+  if (Number.isFinite(credits)) out.hunterCredits = Math.max(0, credits)
   return out
 }
 
@@ -708,7 +790,15 @@ export async function pipelineBacklog() {
     prisma.prospect.count({ where: { enrichedAt: null, relevance: { in: s.enrichFrom === 'HIGH' ? ['HIGH'] : ['HIGH', 'MEDIUM'] }, status: { notIn: ['DO_NOT_CONTACT', 'IN_CAMPAIGN'] }, enrichAttempts: { lt: 3 } } }),
     prisma.prospectEmail.count({ where: { checkedAt: null, prospect: { status: { not: 'DO_NOT_CONTACT' } } } }),
     searchProvider() && s.useWebSearch ? prisma.prospect.count({ where: { webSearchedAt: null, enrichedAt: { not: null }, relevance: { in: outreach }, website: null, linkedIn: null, status: { notIn: ['DO_NOT_CONTACT', 'IN_CAMPAIGN', 'READY_TO_CONTACT'] } } }) : 0,
-    finderProviders().length && s.useFinders ? prisma.prospect.count({ where: { finderCheckedAt: null, enrichedAt: { not: null }, relevance: { in: outreach }, status: { notIn: ['DO_NOT_CONTACT', 'IN_CAMPAIGN', 'READY_TO_CONTACT'] }, OR: [{ linkedIn: { not: null } }, { website: { not: null } }, { AND: [{ firstName: { not: null } }, { lastName: { not: null } }, { company: { not: null } }] }], emails: { none: { status: 'VERIFIED', isFree: false } } } }) : 0,
+    finderProviders().length && s.useFinders ? prisma.prospect.count({
+      where: {
+        finderCheckedAt: null, enrichedAt: { not: null }, relevance: { in: outreach }, status: { notIn: ['DO_NOT_CONTACT', 'IN_CAMPAIGN', 'READY_TO_CONTACT'] },
+        OR: [
+          { AND: [{ OR: [{ linkedIn: { not: null } }, { website: { not: null } }, { AND: [{ firstName: { not: null } }, { lastName: { not: null } }, { company: { not: null } }] }] }, { emails: { none: { status: 'VERIFIED', isFree: false } } }] },
+          { AND: [{ identityScore: { lt: s.minIdentity } }, { emails: { some: { isFree: false, status: { not: 'INVALID' } } } }] },
+        ],
+      },
+    }) : 0,
   ])
   return { videos, review, enrich, identity, finder, verify, total: videos + review + enrich + identity + finder + verify }
 }

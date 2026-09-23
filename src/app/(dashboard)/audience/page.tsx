@@ -25,6 +25,7 @@ const fetcher = (url: string) => fetch(url).then(async (r) => {
 interface Overview {
   config: { youtube: boolean; ai: boolean; verifier: string | null; search: string | null; finders: string[] }
   quota: { used: number; limit: number; left: number }
+  hunter: { plan: string; remaining: number; available: number; resetDate: string | null } | null
   backlog: { videos: number; review: number; enrich: number; identity: number; finder: number; verify: number; total: number }
   funnel: Record<string, number>
   quality: { relevantPct: number | null; profilePct: number | null; emailFoundPct: number | null; verifiedPct: number | null; repeatMerged: number; invalidEmailPct: number | null; emailsTotal: number; dnc: number }
@@ -114,6 +115,11 @@ export default function AudienceOverviewPage() {
           {data && (
             <div className="flex flex-wrap items-center gap-4 text-xs text-slate-500">
               <span>Waiting: {data.backlog.videos} video{data.backlog.videos === 1 ? '' : 's'} to read · {data.backlog.review} to review · {data.backlog.enrich} to research · {data.backlog.identity} to identify · {data.backlog.finder} for email finders · {data.backlog.verify} emails to verify</span>
+              {data.hunter && (
+                <span title={`Hunter ${data.hunter.plan} plan${data.hunter.resetDate ? `, resets ${data.hunter.resetDate}` : ''}. Lookups stop at your reserve.`}>
+                  Hunter credits {data.hunter.remaining}/{data.hunter.available}{data.hunter.resetDate ? ` · resets ${data.hunter.resetDate}` : ''}
+                </span>
+              )}
               <span className="flex items-center gap-1.5" title="Resets at midnight Pacific time">
                 <Gauge className="h-3.5 w-3.5" />YouTube quota {fmtNum(data.quota.used)}/{fmtNum(data.quota.limit)}
                 <span className="inline-block h-1.5 w-20 rounded-full bg-slate-100 overflow-hidden">
@@ -395,6 +401,11 @@ function SettingsDialog({ open, onOpenChange, onSaved }: { open: boolean; onOpen
               <div className="flex flex-wrap gap-5">
                 <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={form.useWebSearch} onChange={(e) => set('useWebSearch', e.target.checked)} />Identity search (web search API)</label>
                 <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={form.useFinders} onChange={(e) => set('useFinders', e.target.checked)} />Email finders (Hunter / Apollo)</label>
+              </div>
+              <div className="flex flex-wrap items-center gap-2 text-sm text-slate-600">
+                Keep
+                <Input type="number" min={0} value={form.hunterReserve} onChange={(e) => set('hunterReserve', Math.max(0, Number(e.target.value) || 0))} className="h-8 w-20" />
+                Hunter credits untouched each month (for your own lookups). The pipeline stops using Hunter at this number.
               </div>
             </div>
 

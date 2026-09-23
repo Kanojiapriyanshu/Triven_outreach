@@ -20,6 +20,7 @@ const schema = z.object({
   minIdentity: z.number().int().min(0).max(100),
   useWebSearch: z.boolean(),
   useFinders: z.boolean(),
+  hunterReserve: z.number().int().min(0).max(100000),
 })
 
 export async function GET() {
