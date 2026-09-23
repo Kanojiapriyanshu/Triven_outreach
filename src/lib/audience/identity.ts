@@ -98,7 +98,8 @@ export async function resolveIdentity(p: {
         // "Jane Doe - Founder - Acme AI | LinkedIn"
         if (!out.linkedIn && (nameIn(r.title) || handleIn(r.url))) {
           out.linkedIn = r.url.split('?')[0]
-          const parts = r.title.replace(/\s*\|\s*LinkedIn.*$/i, '').split(/\s+[-–]\s+/)
+          // Search engines cut long titles: drop the trailing "…" fragment rather than store half a word
+          const parts = r.title.replace(/\s*\|\s*LinkedIn.*$/i, '').replace(/\s*(\.\.\.|…)\s*$/, '').replace(/\s*[|&,]\s*$/, '').split(/\s+[-–]\s+/)
           if (parts.length >= 3) { out.jobTitle ||= parts[1]; out.company ||= parts[2] }
           else if (parts.length === 2 && !/linkedin/i.test(parts[1])) out.jobTitle ||= parts[1]
         }
