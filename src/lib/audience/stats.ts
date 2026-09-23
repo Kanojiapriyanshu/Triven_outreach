@@ -39,11 +39,13 @@ export async function audienceOverview() {
     prisma.prospect.count({ where: { status: 'DO_NOT_CONTACT' } }),
   ])
 
-  const [byInterest, byPersona, byRegion, byRelevance] = await Promise.all([
+  const [byInterest, byPersona, byRegion, byRelevance, byCountry, byPlatform] = await Promise.all([
     prisma.prospect.groupBy({ by: ['interestCategory'], where: { relevance: { in: ['HIGH', 'MEDIUM'] } }, _count: true }),
     prisma.prospect.groupBy({ by: ['persona'], where: { relevance: { in: ['HIGH', 'MEDIUM'] } }, _count: true }),
     prisma.prospect.groupBy({ by: ['region'], where: { relevance: { in: ['HIGH', 'MEDIUM'] } }, _count: true }),
     prisma.prospect.groupBy({ by: ['relevance'], _count: true }),
+    prisma.prospect.groupBy({ by: ['country'], where: { relevance: { in: ['HIGH', 'MEDIUM'] } }, _count: true, orderBy: { _count: { country: 'desc' } }, take: 15 }),
+    prisma.prospect.groupBy({ by: ['platform'], where: { relevance: { in: ['HIGH', 'MEDIUM'] } }, _count: true }),
   ])
 
   // Source performance: which channels' audiences actually turn into conversations
@@ -105,6 +107,8 @@ export async function audienceOverview() {
     byPersona: byPersona.map((r) => ({ key: r.persona || 'UNKNOWN', count: r._count })),
     byRegion: byRegion.map((r) => ({ key: r.region || 'UNKNOWN', count: r._count })),
     byRelevance: byRelevance.map((r) => ({ key: r.relevance, count: r._count })),
+    byCountry: byCountry.map((r) => ({ key: r.country || 'UNKNOWN', count: r._count })),
+    byPlatform: byPlatform.map((r) => ({ key: r.platform, count: r._count })),
     sources: sources.map((s) => ({
       id: String(s.id), title: String(s.title), handle: s.handle as string | null, thumbnailUrl: s.thumbnailUrl as string | null,
       subscriberCount: n(s.subscriberCount), videos: n(s.videos), comments: n(s.comments), prospects: n(s.prospects),

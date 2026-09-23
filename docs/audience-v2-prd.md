@@ -146,3 +146,48 @@ Credit guards: at most 2 searches and 1 finder call per person, only for shortli
 2. Ship the code; existing prospects are re-scored automatically on the next worker runs.
 3. Add `BRAVE_SEARCH_API_KEY` (or Serper) and `HUNTER_API_KEY` and/or `APOLLO_API_KEY` in Vercel.
 4. Apply for a YouTube quota extension if collection becomes the bottleneck.
+
+---
+
+# v3 addendum: more free sources, country targeting, brand (2026-09-23)
+
+## 6. Free data sources: what's usable for outreach
+
+| Source | Cost | Terms for this use | Decision |
+|---|---|---|---|
+| YouTube Data API | Free, 10k units/day | Allowed via API, 1 project per app | **In use** |
+| Hacker News (Algolia search API) | Free, no key | Public API; profile "about" is self-published | **Added in v3** |
+| Serper (Google results) | 2,500 free searches once | Allowed | **In use** for identity |
+| Hunter.io | 50 credits/month free; account and email-count calls free | Allowed | **In use**, credit-guarded |
+| Brave Search API | Free tier removed (2026) | Allowed, paid | Supported, optional |
+| Apollo.io | Free plan has no API | Allowed on paid plans | Supported, optional |
+| Reddit API | Free only for non-commercial; commercial needs approval + $0.24/1k calls | Lead gen is commercial | **Not used** until approved |
+| Product Hunt API | Free | "Must not be used for commercial purposes" without permission | **Not used** |
+| GitHub | Free | AUP §7 forbids use for unsolicited email | **Not used** |
+| LinkedIn / lead-database websites | – | Scraping forbidden | **Not used**; use their APIs |
+
+Next candidates worth evaluating: Stack Exchange API (free key, developer Q&A), Dev.to API (free, articles on AI agents), Reddit once commercial approval is granted.
+
+## 7. Country targeting ("comments by country")
+
+Neither YouTube nor Hacker News exposes a commenter's country, so it's done in two layers:
+
+1. **Target at the source.** YouTube search with `regionCode` + `relevanceLanguage=en`, "creators from this country only" (the creator's channel country), and "find creators" by country. Local creators have mostly local audiences.
+2. **Infer per person, with a confidence.** Signals, strongest first:
+   - manual (100)
+   - Hunter geo (85)
+   - YouTube channel country (80)
+   - stated location (75)
+   - LinkedIn country subdomain, e.g. `uk.linkedin.com` (70)
+   - phone prefix in the bio (65)
+   - website ccTLD (60)
+   - "based in / from / here in <place>" or a known city in their own words (55)
+   - currency they mention: ₹, £, A$ (45)
+
+   Two independent signals that agree add +10. The country source and confidence are stored and shown ("🇬🇧 United Kingdom · linkedin, 70%").
+
+Uses: filter and route prospects by country, per-country breakdown, stricter EU/UK/CA/AU/NZ email rules, and local search results in the identity step (Serper `gl`).
+
+## 8. Brand & UI
+
+Triven gold (from the logo) is the accent across the app, with a dark ink sidebar grouped into Workspace / Audience / Outreach / Configuration, Inter as the typeface, and consistent page headers. The button gold (#A85D05) keeps white text at 4.96:1 contrast (WCAG AA).

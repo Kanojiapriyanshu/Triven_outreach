@@ -11,10 +11,11 @@ export function searchProvider(): 'BRAVE' | 'SERPER' | null {
   return null
 }
 
-export async function webSearch(q: string): Promise<SearchResult[]> {
+export async function webSearch(q: string, country?: string | null): Promise<SearchResult[]> {
+  const cc = country && /^[a-z]{2}$/i.test(country) ? country.toLowerCase() : ''
   const p = searchProvider()
   if (p === 'BRAVE') {
-    const res = await fetch(`https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(q)}&count=10`, {
+    const res = await fetch(`https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(q)}&count=10${cc ? `&country=${cc === 'gb' ? 'gb' : cc}` : ''}`, {
       headers: { Accept: 'application/json', 'X-Subscription-Token': process.env.BRAVE_SEARCH_API_KEY! },
       signal: AbortSignal.timeout(10_000), cache: 'no-store',
     })
@@ -26,7 +27,7 @@ export async function webSearch(q: string): Promise<SearchResult[]> {
     const res = await fetch('https://google.serper.dev/search', {
       method: 'POST',
       headers: { 'X-API-KEY': process.env.SERPER_API_KEY!, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ q, num: 10 }),
+      body: JSON.stringify({ q, num: 10, ...(cc ? { gl: cc === 'gb' ? 'uk' : cc } : {}) }),
       signal: AbortSignal.timeout(10_000), cache: 'no-store',
     })
     if (!res.ok) throw new Error(`Serper HTTP ${res.status}`)
@@ -57,7 +58,7 @@ const GENERIC_HANDLE = /^(user|channel|official|tech|ai|the|mr|real|its|im|hello
 /** Search for the person; returns only matches we can tie to their name/handle */
 export async function resolveIdentity(p: {
   displayName: string; firstName?: string | null; lastName?: string | null; handle?: string | null
-  company?: string | null; topic?: string | null; interestCategory?: string | null
+  company?: string | null; topic?: string | null; interestCategory?: string | null; country?: string | null
 }): Promise<Identity> {
   const out: Identity = { notes: [], searches: 0 }
   const first = p.firstName?.trim() || ''
@@ -85,7 +86,7 @@ export async function resolveIdentity(p: {
   for (const q of queries) {
     let results: SearchResult[]
     try {
-      results = await webSearch(q)
+      results = await webSearch(q, p.country)
       out.searches++
     } catch (err) {
       out.notes.push(`Search failed: ${(err as Error).message}`)

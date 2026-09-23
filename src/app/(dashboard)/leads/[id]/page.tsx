@@ -300,10 +300,12 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
           {/* Why we contacted them (YouTube audience) */}
           {(lead.sourceVideo || lead.sourceComment) && (
             <Card>
-              <CardHeader><CardTitle>Found on YouTube</CardTitle></CardHeader>
+              <CardHeader><CardTitle>Found on {lead.sourcePlatform === 'HN' ? 'Hacker News' : 'YouTube'}</CardTitle></CardHeader>
               <CardContent className="space-y-2 text-sm">
                 <p className="text-slate-600">
-                  Commented on {lead.sourceChannel ? <strong>{lead.sourceChannel}</strong> : 'a video'}{lead.sourceVideo ? <>&apos;s video &ldquo;{lead.sourceVideo}&rdquo;</> : ''}
+                  {lead.sourcePlatform === 'HN'
+                    ? <>Commented in the thread {lead.sourceVideo ? <>&ldquo;{lead.sourceVideo}&rdquo;</> : ''}</>
+                    : <>Commented on {lead.sourceChannel ? <strong>{lead.sourceChannel}</strong> : 'a video'}{lead.sourceVideo ? <>&apos;s video &ldquo;{lead.sourceVideo}&rdquo;</> : ''}</>}
                   {lead.commentTopic && <> about <strong>{lead.commentTopic}</strong></>}.
                   {lead.sourceVideoUrl && <> <a href={lead.sourceVideoUrl} target="_blank" rel="noreferrer" className="text-indigo-600 hover:underline">Open comment ↗</a></>}
                 </p>
@@ -536,6 +538,7 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
             whyThisLead:     lead.whyThisLead,
             notes:           lead.notes,
             personalizationNotes: lead.personalizationNotes,
+            sourcePlatform:  lead.sourcePlatform,
             sourceChannel:   lead.sourceChannel,
             sourceVideo:     lead.sourceVideo,
             commentTopic:    lead.commentTopic,

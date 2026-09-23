@@ -15,6 +15,8 @@ import { PERSONAS, INTERESTS, COUNTRIES, sequenceForPersona, type Persona, type 
 import { AI_BUILDER_SEQUENCES } from '@/lib/audience/sequences'
 import { buildTemplateVars, renderTemplate } from '@/lib/template'
 import { fmtRelative } from '@/lib/utils'
+import { commentUrl, profileUrl, PLATFORM_LABEL } from '@/lib/audience/links'
+import { flag } from '@/lib/audience/country'
 
 const fetcher = (url: string) => fetch(url).then(async (r) => {
   const d = await r.json().catch(() => ({}))
@@ -30,16 +32,17 @@ interface Detail {
   relevance: string; score: number; reason: string | null; topic: string | null; icebreaker: string | null; status: string
   consentSensitive: boolean; enrichedAt: string | null; enrichNotes: string | null; aiCheckedAt: string | null; firstSeenAt: string
   emails: Array<{ id: string; email: string; source: string; sourceUrl: string | null; status: string; verifyMethod: string | null; verifyDetail: string | null; isPrimary: boolean; isRole: boolean; isFree: boolean; confidence: number | null }>
-  comments: Array<{ id: string; youtubeCommentId: string; text: string; relevance: string; score: number; signals: string[]; likeCount: number; publishedAt: string | null; video: { title: string; youtubeVideoId: string; channel: { title: string } } }>
+  comments: Array<{ id: string; youtubeCommentId: string; text: string; relevance: string; score: number; signals: string[]; likeCount: number; publishedAt: string | null; video: { title: string; youtubeVideoId: string; platform: string; channel: { title: string } } }>
   lead: { id: string; status: string; firstEmailSentAt: string | null; hasReplied: boolean; campaign: { id: string; name: string } | null } | null
   sendableEmailId: string | null
+  platform: string; profileUrl: string | null; countrySource: string | null; countryConfidence: number
   readinessGap: string | null
   intentScore: number; intentEvidence: string[]; identityScore: number; ownChannelSummary: string | null; ownChannelAi: boolean
   deepReadAt: string | null; webSearchedAt: string | null; finderCheckedAt: string | null
 }
 
 const SOURCE_LABEL: Record<string, string> = {
-  CHANNEL: 'their YouTube bio', CHANNEL_VIDEO: 'their own video description', COMMENT: 'their comment', WEBSITE: 'their website',
+  CHANNEL: 'their profile bio', CHANNEL_VIDEO: 'their own video description', COMMENT: 'their comment', WEBSITE: 'their website',
   LINK_PAGE: 'link-in-bio page', HUNTER: 'Hunter', APOLLO: 'Apollo', PATTERN: 'name pattern (verified)', MANUAL: 'added by hand',
   GITHUB: 'GitHub profile (no longer used)',
 }
@@ -109,7 +112,7 @@ export default function ProspectDialog({ id, onClose, onChanged, onPush }: { id:
     const best = p.comments[0]
     const lead = {
       firstName: p.firstName, lastName: p.lastName, companyName: p.company || '', companyEmail: p.emails.find((e) => e.id === p.sendableEmailId)?.email || null,
-      industry: 'AI Builder', personalizationNotes: p.icebreaker, sourceChannel: best?.video.channel.title, sourceVideo: best?.video.title,
+      industry: 'AI Builder', personalizationNotes: p.icebreaker, sourcePlatform: p.platform, sourceChannel: best?.video.channel.title, sourceVideo: best?.video.title,
       commentTopic: p.topic, interestCategory: p.interestCategory, persona: p.persona,
     }
     const vars = buildTemplateVars(lead, { displayName: me?.user?.name || 'You' })
@@ -134,9 +137,10 @@ export default function ProspectDialog({ id, onClose, onChanged, onPush }: { id:
                     {p.consentSensitive && <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-800" title="EU/UK/CA/AU/NZ: only self-published addresses are used">stricter rules</span>}
                   </DialogTitle>
                   <p className="text-xs text-slate-500 mt-1">
-                    <a href={`https://www.youtube.com/channel/${p.youtubeChannelId}`} target="_blank" rel="noreferrer" className="hover:text-indigo-600">{p.handle || p.displayName} <ExternalLink className="inline h-3 w-3" /></a>
+                    <span className="mr-1 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-600">{PLATFORM_LABEL[p.platform] || p.platform}</span>
+                    <a href={profileUrl(p)} target="_blank" rel="noreferrer" className="hover:text-indigo-600">{p.handle || p.displayName} <ExternalLink className="inline h-3 w-3" /></a>
                     {p.subscriberCount > 0 && <> · {fmtNum(p.subscriberCount)} subscribers</>}
-                    {p.country && <> · {COUNTRIES[p.country]?.name || p.country}</>}
+                    {p.country && <> · <span title={`From ${(p.countrySource || '').toLowerCase()}, ${p.countryConfidence}% sure`}>{flag(p.country)} {COUNTRIES[p.country]?.name || p.country}{p.countryConfidence && p.countryConfidence < 70 ? ' (likely)' : ''}</span></>}
                     {p.location && <> · {p.location}</>}
                     {' '}· first seen {fmtRelative(p.firstSeenAt)}
                   </p>
@@ -280,7 +284,7 @@ export default function ProspectDialog({ id, onClose, onChanged, onPush }: { id:
                   <div key={c.id} className="rounded-lg border border-slate-100 p-2.5">
                     <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-slate-500">
                       <RelevanceBadge value={c.relevance} score={c.score} />
-                      <a href={`https://www.youtube.com/watch?v=${c.video.youtubeVideoId}&lc=${c.youtubeCommentId}`} target="_blank" rel="noreferrer" className="hover:text-indigo-600 truncate max-w-[420px]">{c.video.channel.title} · {c.video.title} <ExternalLink className="inline h-3 w-3" /></a>
+                      <a href={commentUrl(c.video.platform, c.video.youtubeVideoId, c.youtubeCommentId)} target="_blank" rel="noreferrer" className="hover:text-indigo-600 truncate max-w-[420px]">{c.video.channel.title} · {c.video.title} <ExternalLink className="inline h-3 w-3" /></a>
                       {c.likeCount > 0 && <span>· {c.likeCount} likes</span>}
                       {c.signals.filter((s) => s !== 'generic').map((s) => <span key={s} className="rounded bg-slate-100 px-1">{s.replace(/_/g, ' ')}</span>)}
                     </div>

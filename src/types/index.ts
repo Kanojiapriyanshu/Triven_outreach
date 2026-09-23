@@ -179,6 +179,7 @@ export interface LeadRow {
   dealValue: string | null
   lostReason: string | null
   prospectId?: string | null
+  sourcePlatform?: string | null
   sourceChannel?: string | null
   sourceVideo?: string | null
   sourceVideoUrl?: string | null

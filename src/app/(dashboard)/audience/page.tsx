@@ -15,6 +15,8 @@ import PipelineRunner from '@/components/audience/PipelineRunner'
 import { fmtNum, Avatar } from '@/components/audience/badges'
 import { COUNTRIES, ENGLISH_COUNTRIES, INTERESTS, PERSONAS, REGIONS, type Interest, type Persona, type Region } from '@/lib/audience/taxonomy'
 import type { AudienceSettings } from '@/lib/audience/settings'
+import { flag } from '@/lib/audience/country'
+import PageHeader from '@/components/layout/PageHeader'
 
 const fetcher = (url: string) => fetch(url).then(async (r) => {
   const d = await r.json().catch(() => ({}))
@@ -34,6 +36,8 @@ interface Overview {
   byInterest: Array<{ key: string; count: number }>
   byPersona: Array<{ key: string; count: number }>
   byRegion: Array<{ key: string; count: number }>
+  byCountry: Array<{ key: string; count: number }>
+  byPlatform: Array<{ key: string; count: number }>
   sources: Array<{ id: string; title: string; handle: string | null; thumbnailUrl: string | null; subscriberCount: number; videos: number; comments: number; prospects: number; relevant: number; withEmail: number; verified: number; contacted: number; replied: number; interested: number; meetings: number }>
 }
 interface PresetCampaign { key: string; name: string; personas: string[]; id: string | null; sendingStatus: string | null; leads: number; templates: number }
@@ -94,20 +98,17 @@ export default function AudienceOverviewPage() {
 
   return (
     <div className="space-y-5 max-w-7xl">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-bold text-slate-900 flex items-center gap-2"><Radar className="h-5 w-5 text-indigo-600" />YouTube Audience</h1>
-          <p className="text-sm text-slate-500 max-w-3xl">
-            People who already comment on AI videos, filtered for relevance, researched, and verified before anyone emails them.
-            The pipeline also runs by itself every 5 minutes.
-          </p>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
+      <PageHeader
+        section="Audience"
+        title="Audience overview"
+        icon={Radar}
+        description="People who discuss AI on YouTube and Hacker News, scored for buying intent, identified, and verified before anyone emails them. The pipeline also runs by itself every 5 minutes."
+        actions={<>
           <Button size="sm" variant="outline" asChild><Link href="/audience/discover"><Telescope className="h-3.5 w-3.5" />Discover</Link></Button>
           <Button size="sm" variant="outline" asChild><Link href="/audience/prospects"><UserSearch className="h-3.5 w-3.5" />Prospects</Link></Button>
-          <Button size="sm" variant="ghost" onClick={() => setShowSettings(true)}><Settings2 className="h-4 w-4" />Rules</Button>
-        </div>
-      </div>
+          <Button size="sm" variant="outline" onClick={() => setShowSettings(true)}><Settings2 className="h-4 w-4" />Rules</Button>
+        </>}
+      />
 
       <Card>
         <CardContent className="p-4 flex flex-wrap items-center justify-between gap-3">
@@ -221,10 +222,12 @@ export default function AudienceOverviewPage() {
       </div>
 
       {/* Breakdown */}
-      <div className="grid gap-5 md:grid-cols-3">
+      <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
         <Breakdown title="By interest" rows={(data?.byInterest || []).map((r) => ({ label: INTERESTS[r.key as Interest]?.label || 'Not clear', count: r.count, href: `/audience/prospects?interest=${r.key}` }))} />
         <Breakdown title="By persona" rows={(data?.byPersona || []).map((r) => ({ label: PERSONAS[r.key as Persona]?.label || 'Not clear yet', count: r.count, href: `/audience/prospects?persona=${r.key}` }))} />
-        <Breakdown title="By region" rows={(data?.byRegion || []).map((r) => ({ label: REGIONS[r.key as Region] || 'Unknown (no country on profile)', count: r.count, href: r.key !== 'UNKNOWN' ? `/audience/prospects?region=${r.key}` : undefined }))} />
+        <Breakdown title="By country" rows={(data?.byCountry || []).map((r) => ({ label: r.key === 'UNKNOWN' ? 'Not known yet' : `${flag(r.key)} ${COUNTRIES[r.key]?.name || r.key}`, count: r.count, href: `/audience/prospects?country=${r.key}` }))} />
+        <Breakdown title="By region" rows={(data?.byRegion || []).map((r) => ({ label: REGIONS[r.key as Region] || 'Unknown', count: r.count, href: r.key !== 'UNKNOWN' ? `/audience/prospects?region=${r.key}` : undefined }))} />
+        <Breakdown title="By source" rows={(data?.byPlatform || []).map((r) => ({ label: r.key === 'HN' ? 'Hacker News' : 'YouTube', count: r.count, href: `/audience/prospects?platform=${r.key}` }))} />
       </div>
 
       {/* Sources */}

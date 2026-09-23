@@ -8,6 +8,9 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { fmtCurrency } from '@/lib/utils'
 import type { DashboardStats } from '@/types'
+import PageHeader from '@/components/layout/PageHeader'
+import { Button } from '@/components/ui/button'
+import Link from 'next/link'
 
 const fetcher = (url: string) => fetch(url).then((r) => r.json())
 
@@ -62,13 +65,15 @@ export default function DashboardPage() {
 
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div>
-        <h1 className="text-xl font-bold text-slate-900">Dashboard</h1>
-        <p className="text-sm text-slate-500 mt-0.5">
-          {new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}
-        </p>
-      </div>
+      <PageHeader
+        section={new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}
+        title="Dashboard"
+        description="Today's pipeline, replies and inbox health at a glance."
+        actions={<>
+          <Button size="sm" variant="outline" asChild><Link href="/audience">Audience</Link></Button>
+          <Button size="sm" asChild><Link href="/campaigns">Campaigns</Link></Button>
+        </>}
+      />
 
       {/* Today's metrics */}
       <div>

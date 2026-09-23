@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { requireAuth } from '@/lib/auth'
 import prisma from '@/lib/prisma'
 import { prospectWhere, prospectOrder } from '@/lib/audience/filters'
+import { commentUrl, profileUrl } from '@/lib/audience/links'
 import { personaLabel, interestLabel, countryName, PROSPECT_STATUSES, type ProspectStatus } from '@/lib/audience/taxonomy'
 
 /** RFC 4180 cell: quote when needed, double embedded quotes, neutralise spreadsheet formulas */
@@ -28,17 +29,18 @@ export async function GET(req: NextRequest) {
     },
   })
 
-  const header = ['Name', 'YouTube profile', 'Source channel', 'Source video', 'Comment', 'Comment topic', 'Interest category', 'Persona', 'Relevance', 'Intent score', 'Intent evidence', 'Identity score', 'Their channel',
-    'Company', 'Job title', 'LinkedIn', 'Website', 'Email', 'Email status', 'Email source', 'Other emails', 'Location', 'Country', 'Why selected', 'Status', 'Campaign', 'First seen']
+  const header = ['Name', 'Source', 'Profile', 'Source channel', 'Source video', 'Comment', 'Comment topic', 'Interest category', 'Persona', 'Relevance', 'Intent score', 'Intent evidence', 'Identity score', 'Their channel',
+    'Company', 'Job title', 'LinkedIn', 'Website', 'Email', 'Email status', 'Email source', 'Other emails', 'Location', 'Country', 'Country from', 'Why selected', 'Status', 'Campaign', 'First seen']
   const lines = [header.join(',')]
   for (const p of rows) {
     const best = p.comments[0]
     const primary = p.emails.find((e) => e.status !== 'INVALID') || p.emails[0]
     lines.push([
       p.firstName ? [p.firstName, p.lastName].filter(Boolean).join(' ') : p.displayName,
-      `https://www.youtube.com/channel/${p.youtubeChannelId}`,
+      p.platform === 'HN' ? 'Hacker News' : 'YouTube',
+      profileUrl(p),
       best?.video.channel.title,
-      best ? `https://www.youtube.com/watch?v=${best.video.youtubeVideoId}&lc=${best.youtubeCommentId}` : '',
+      best ? commentUrl(best.video.platform, best.video.youtubeVideoId, best.youtubeCommentId) : '',
       best?.text,
       p.topic,
       interestLabel(p.interestCategory),
@@ -53,6 +55,7 @@ export async function GET(req: NextRequest) {
       p.emails.filter((e) => e !== primary).map((e) => `${e.email} (${e.status.toLowerCase()})`).join('; '),
       p.location,
       countryName(p.country),
+      p.country ? `${(p.countrySource || '').toLowerCase()} (${p.countryConfidence}%)` : '',
       p.reason,
       p.lead?.status || PROSPECT_STATUSES[p.status as ProspectStatus] || p.status,
       p.lead?.campaign?.name,

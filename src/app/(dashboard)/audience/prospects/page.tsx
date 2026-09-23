@@ -12,8 +12,10 @@ import { RelevanceBadge, ProspectStatusBadge, EmailChip, Avatar } from '@/compon
 import PushDialog from '@/components/audience/PushDialog'
 import ProspectDialog from '@/components/audience/ProspectDialog'
 import {
-  PERSONAS, INTERESTS, PROSPECT_STATUSES, REGIONS, COUNTRIES, personaLabel, interestLabel,
+  PERSONAS, INTERESTS, PROSPECT_STATUSES, REGIONS, COUNTRIES, ENGLISH_COUNTRIES, personaLabel, interestLabel,
 } from '@/lib/audience/taxonomy'
+import { flag } from '@/lib/audience/country'
+import PageHeader from '@/components/layout/PageHeader'
 
 const fetcher = (url: string) => fetch(url).then(async (r) => {
   const d = await r.json().catch(() => ({}))
@@ -27,13 +29,14 @@ interface Row {
   persona: string | null; interestCategory: string | null; relevance: string; score: number; topic: string | null; status: string
   commentCount: number; consentSensitive: boolean; enrichedAt: string | null
   intentScore: number; intentEvidence: string[]; identityScore: number; ownChannelAi: boolean
+  platform: string; profileUrl: string | null; countrySource: string | null; countryConfidence: number
   emails: Array<{ id: string; email: string; status: string; isPrimary: boolean; isFree: boolean }>
   lead: { id: string; status: string; campaign: { name: string } | null } | null
   comments: Array<{ text: string; video: { title: string; channel: { title: string } } }>
 }
 interface Page { data: Row[]; total: number; page: number; totalPages: number }
 
-const FILTER_KEYS = ['q', 'relevance', 'persona', 'interest', 'status', 'email', 'region', 'channelId', 'videoId', 'sort', 'hideSpam', 'identified', 'minIntent', 'ownChannelAi'] as const
+const FILTER_KEYS = ['q', 'relevance', 'persona', 'interest', 'status', 'email', 'region', 'channelId', 'videoId', 'sort', 'hideSpam', 'identified', 'minIntent', 'ownChannelAi', 'country', 'platform'] as const
 
 const QUICK: Array<{ label: string; params: Record<string, string> }> = [
   { label: 'Ready to contact', params: { status: 'READY_TO_CONTACT' } },
@@ -95,15 +98,13 @@ function ProspectsInner() {
 
   return (
     <div className="space-y-4 max-w-[1400px]">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-bold text-slate-900 flex items-center gap-2"><UserSearch className="h-5 w-5 text-indigo-600" />Prospects</h1>
-          <p className="text-sm text-slate-500">One row per person, however many comments they left. Click a row for their comments, emails and a preview of their first email.</p>
-        </div>
-        <Button size="sm" variant="outline" asChild>
-          <a href={`/api/audience/prospects/export?${filterString}`}><Download className="h-3.5 w-3.5" />Export CSV</a>
-        </Button>
-      </div>
+      <PageHeader
+        section="Audience"
+        title="Prospects"
+        icon={UserSearch}
+        description="One row per person across YouTube and Hacker News, ranked by buying intent. Open a row for the evidence, their emails and a preview of the first email."
+        actions={<Button size="sm" variant="outline" asChild><a href={`/api/audience/prospects/export?${filterString}`}><Download className="h-3.5 w-3.5" />Export CSV</a></Button>}
+      />
 
       <Card className="p-4 space-y-3">
         <div className="flex flex-wrap gap-1.5">
@@ -126,7 +127,9 @@ function ProspectsInner() {
           <Sel value={sp.get('interest') || ''} onChange={(v) => setFilter({ interest: v })} options={[['', 'Any interest'], ...Object.entries(INTERESTS).map(([k, v]) => [k, v.label] as [string, string])]} />
           <Sel value={sp.get('status') || ''} onChange={(v) => setFilter({ status: v })} options={[['', 'Any status'], ...Object.entries(PROSPECT_STATUSES) as Array<[string, string]>]} />
           <Sel value={sp.get('email') || ''} onChange={(v) => setFilter({ email: v })} options={[['', 'Any email'], ['business', 'Verified business email'], ['verified', 'Any verified email'], ['any', 'Has an email'], ['none', 'No email']]} />
-          <Sel value={sp.get('region') || ''} onChange={(v) => setFilter({ region: v })} options={[['', 'Any region'], ...Object.entries(REGIONS) as Array<[string, string]>]} />
+          <Sel value={sp.get('region') || ''} onChange={(v) => setFilter({ region: v, country: null })} options={[['', 'Any region'], ...Object.entries(REGIONS) as Array<[string, string]>]} />
+          <Sel value={sp.get('country') || ''} onChange={(v) => setFilter({ country: v })} options={[['', 'Any country'], ...ENGLISH_COUNTRIES.map((c) => [c, `${flag(c)} ${COUNTRIES[c].name}`] as [string, string]), ['UNKNOWN', 'Country unknown']]} />
+          <Sel value={sp.get('platform') || ''} onChange={(v) => setFilter({ platform: v })} options={[['', 'All sources'], ['YOUTUBE', 'YouTube'], ['HN', 'Hacker News']]} />
           <Sel value={sp.get('channelId') || ''} onChange={(v) => setFilter({ channelId: v, videoId: null })} options={[['', 'Any source channel'], ...(Array.isArray(channels) ? channels : []).map((c) => [c.id, c.title] as [string, string])]} />
           <Sel value={sp.get('sort') || ''} onChange={(v) => setFilter({ sort: v })} options={[['', 'Highest intent'], ['recent', 'Most recent'], ['comments', 'Most comments'], ['subscribers', 'Biggest channel']]} />
         </div>
@@ -195,7 +198,8 @@ function ProspectsInner() {
                             {[r.jobTitle, r.company].filter(Boolean).join(' · ') || personaLabel(r.persona)}
                           </p>
                           <p className="text-[11px] text-slate-400 flex items-center gap-1.5">
-                            {r.country && <span>{COUNTRIES[r.country]?.name || r.country}</span>}
+                            <span className="rounded bg-slate-100 px-1 text-[9px] font-semibold text-slate-500">{r.platform === 'HN' ? 'HN' : 'YT'}</span>
+                            {r.country && <span title={`${(r.countrySource || '').toLowerCase()} · ${r.countryConfidence}% sure`}>{flag(r.country)} {COUNTRIES[r.country]?.name || r.country}{r.countryConfidence < 70 ? '?' : ''}</span>}
                             {r.website && <Globe className="h-3 w-3" />}
                             {r.linkedIn && <span>in</span>}
                             {r.github && <span>gh</span>}

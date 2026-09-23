@@ -24,7 +24,9 @@ export function prospectWhere(sp: URLSearchParams): Prisma.ProspectWhereInput {
   if (list('interest').length) and.push({ interestCategory: { in: list('interest') } })
   if (list('status').length) and.push({ status: { in: list('status') } })
   if (list('region').length) and.push({ region: { in: list('region') } })
-  if (list('country').length) and.push({ country: { in: list('country') } })
+  if (sp.get('country') === 'UNKNOWN') and.push({ country: null })
+  else if (list('country').length) and.push({ country: { in: list('country') } })
+  if (list('platform').length) and.push({ platform: { in: list('platform') } })
 
   const email = sp.get('email')
   if (email === 'verified') and.push({ emails: { some: { status: 'VERIFIED' } } })

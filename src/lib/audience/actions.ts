@@ -9,6 +9,8 @@ import {
 import { bestEmail, readinessGap, updateStatus } from './pipeline'
 import { getAudienceSettings } from './settings'
 import { INTERESTS, AUDIENCE_CAMPAIGNS, type Interest } from './taxonomy'
+import { commentUrl, profileUrl, PLATFORM_LABEL } from './links'
+import { HN_CHANNEL_ID, HN_CHANNEL_TITLE, hnStoryUrl, type HnStory } from './hn'
 
 export { AUDIENCE_CAMPAIGNS }
 
@@ -75,7 +77,7 @@ export async function saveVideos(videos: YtVideo[]) {
       where: { youtubeVideoId: v.id },
       create: { youtubeVideoId: v.id, ...data },
       update: data,
-      include: { channel: { select: { title: true, handle: true } } },
+      include: { channel: { select: { title: true, handle: true, country: true } } },
     }))
   }
   return saved
@@ -98,7 +100,7 @@ export async function scanChannel(channelDbId: string, max = 50) {
 }
 
 /** Paste anything: a video URL, a channel URL, an @handle, or a search phrase for channels */
-export async function addFromInput(input: string, opts: { queue?: boolean; maxComments?: number } = {}) {
+export async function addFromInput(input: string, opts: { queue?: boolean; maxComments?: number; regionCode?: string } = {}) {
   const parsed = parseYouTubeInput(input)
   if (parsed.kind === 'video') {
     const videos = await saveVideos(await getVideos([parsed.id]))
@@ -111,7 +113,7 @@ export async function addFromInput(input: string, opts: { queue?: boolean; maxCo
   else if (parsed.kind === 'handle') {
     const c = await getChannelByHandle(parsed.handle)
     channels = c ? [c] : []
-  } else channels = await searchChannels(parsed.q)
+  } else channels = await searchChannels(parsed.q, opts.regionCode || undefined)
   if (!channels.length) throw new Error('No channel found')
   const saved = []
   for (const c of channels) saved.push(await saveChannel(c))
@@ -200,7 +202,7 @@ export async function pushToCampaign(prospectIds: string[], target: { campaignId
     if (!campaignId) { skip('no campaign for this persona'); continue }
 
     const best = p.comments[0]
-    const videoUrl = best ? `https://www.youtube.com/watch?v=${best.video.youtubeVideoId}&lc=${best.youtubeCommentId}` : null
+    const videoUrl = best ? commentUrl(best.video.platform, best.video.youtubeVideoId, best.youtubeCommentId) : null
     const interest = (p.interestCategory || 'GENERAL_AI') as Interest
     const lead = await prisma.lead.create({
       data: {
@@ -225,9 +227,10 @@ export async function pushToCampaign(prospectIds: string[], target: { campaignId
         whyThisLead: [p.reason, p.intentEvidence.length ? `Evidence: ${p.intentEvidence.join('; ')}` : ''].filter(Boolean).join('\n'),
         personalizationNotes: p.icebreaker,
         researchSummary: p.channelDescription?.slice(0, 2000) || p.bio,
-        socialMediaNotes: [`https://www.youtube.com/channel/${p.youtubeChannelId}`, p.twitter, p.github && `https://github.com/${p.github}`, ...p.otherLinks.slice(0, 5)].filter(Boolean).join('\n'),
+        socialMediaNotes: [profileUrl(p), p.twitter, p.github && `https://github.com/${p.github}`, ...p.otherLinks.slice(0, 5)].filter(Boolean).join('\n'),
         prospectingNotes: `Intent ${p.intentScore}/100 · identity ${p.identityScore}/100 · email from ${email.source.toLowerCase().replace('_', ' ')}, ${email.status.toLowerCase()}${email.verifyMethod ? ` (${email.verifyMethod.toLowerCase()})` : ''}${email.confidence ? `, confidence ${email.confidence}` : ''}`,
         prospectId: p.id,
+        sourcePlatform: p.platform,
         sourceChannel: best?.video.channel.title,
         sourceVideo: best?.video.title,
         sourceVideoUrl: videoUrl,
@@ -242,7 +245,7 @@ export async function pushToCampaign(prospectIds: string[], target: { campaignId
         leadId: lead.id,
         userId,
         type: 'NOTE_ADDED',
-        title: 'Added from YouTube audience',
+        title: `Added from ${PLATFORM_LABEL[p.platform] || 'audience'}`,
         body: `${p.reason || ''}\n\nComment: "${best?.text.slice(0, 400) || ''}"`,
         metadata: { prospectId: p.id, videoUrl },
       },
@@ -306,4 +309,50 @@ export async function addManualEmail(prospectId: string, email: string) {
   })
   await updateStatus(prospectId)
   return row
+}
+
+// ─── Hacker News ─────────────────────────────────────────────────────────────
+
+const HN_BUILDER = /\b(show hn|ask hn|launch hn|agents?|automat\w*|build|built|building|llm|gpt|claude|voice|workflow|saas|startup|founder|n8n|zapier|open.?source|tool|api)\b/gi
+
+/** Save Hacker News threads as sources, scored for how many builders their discussion attracts */
+export async function saveHnStories(stories: HnStory[]) {
+  const channel = await prisma.audienceChannel.upsert({
+    where: { youtubeChannelId: HN_CHANNEL_ID },
+    create: { youtubeChannelId: HN_CHANNEL_ID, platform: 'HN', title: HN_CHANNEL_TITLE, handle: 'news.ycombinator.com', topicScore: 80, description: 'Developer and founder discussions' },
+    update: {},
+  })
+  const saved = []
+  for (const s of stories) {
+    const topics = new Set((s.title.match(HN_BUILDER) || []).map((w) => w.toLowerCase())).size
+    const ageDays = (Date.now() - s.createdAt.getTime()) / 86_400_000
+    const reasons = [`${s.comments.toLocaleString('en-US')} comments`, `${s.points} points`]
+    let score = Math.min(35, topics * 9)
+    score += s.comments >= 300 ? 25 : s.comments >= 100 ? 20 : s.comments >= 40 ? 12 : 6
+    if (/^(show|launch) hn/i.test(s.title)) { score += 15; reasons.push('Show HN: builders in the thread') }
+    if (/^ask hn/i.test(s.title)) { score += 12; reasons.push('Ask HN: people describing their own setups') }
+    if (ageDays <= 60) { score += 15; reasons.push('recent') } else if (ageDays <= 365) score += 8
+    const fit = scoreVideo({ title: s.title, viewCount: 0, commentCount: s.comments, likeCount: s.points, publishedAt: s.createdAt, durationSeconds: 0 })
+    const data = {
+      channelId: channel.id,
+      platform: 'HN',
+      title: s.title,
+      url: hnStoryUrl(s.id),
+      description: s.url,
+      publishedAt: s.createdAt,
+      viewCount: 0,
+      likeCount: s.points,
+      commentCount: s.comments,
+      score: Math.min(100, score),
+      scoreReasons: reasons.join(' · '),
+      interestCategory: fit.interest,
+    }
+    saved.push(await prisma.audienceVideo.upsert({
+      where: { youtubeVideoId: `hn:${s.id}` },
+      create: { youtubeVideoId: `hn:${s.id}`, ...data },
+      update: data,
+      include: { channel: { select: { title: true, handle: true, country: true } } },
+    }))
+  }
+  return saved
 }

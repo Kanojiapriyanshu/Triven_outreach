@@ -12,7 +12,9 @@
 import type { Prisma, Prospect, ProspectEmail } from '@prisma/client'
 import prisma from '../prisma'
 import { classifyComment, parseName, profileHints, computeIntent, computeIdentity, ownChannelProfile } from './classify'
-import { commentThreadsPage, getChannels, getVideos, latestUploadIds, YouTubeError, youtubeConfigured, type YtComment } from './youtube'
+import { commentThreadsPage, getChannels, getVideos, latestUploadIds, YouTubeError, youtubeConfigured } from './youtube'
+import { storyComments, hnUser, hnUserUrl } from './hn'
+import { inferCountry } from './country'
 import { discover, hostOf, patternGuesses, SHARED_HOSTS, crawlWebsite, type Findings } from './enrich'
 import { resolveIdentity, searchProvider } from './identity'
 import { findBusinessEmail, finderProviders } from './finders'
@@ -30,15 +32,20 @@ export interface CollectResult { pages: number; newComments: number; newProspect
 
 export async function collectComments(deadline: number): Promise<CollectResult> {
   const out: CollectResult = { pages: 0, newComments: 0, newProspects: 0, videosDone: 0, errors: [] }
-  if (!youtubeConfigured()) return out
+  const platforms = [...(youtubeConfigured() ? ['YOUTUBE'] : []), 'HN']
   const videos = await prisma.audienceVideo.findMany({
-    where: { status: { in: ['QUEUED', 'COLLECTING'] } },
+    where: { status: { in: ['QUEUED', 'COLLECTING'] }, platform: { in: platforms } },
     include: { channel: { select: { youtubeChannelId: true } } },
     orderBy: [{ status: 'asc' }, { score: 'desc' }], // COLLECTING first, then best-fit
     take: 10,
   })
 
   for (const video of videos) {
+    if (left(deadline) <= 8_000) break
+    if (video.platform === 'HN') {
+      await collectHnStory(video, out)
+      continue
+    }
     while (left(deadline) > 8_000) {
       let page
       try {
@@ -55,8 +62,22 @@ export async function collectComments(deadline: number): Promise<CollectResult> 
         break
       }
       out.pages++
-      const { inserted, newProspects } = await ingestThreads(video, page.items.flatMap((t) => [t.snippet.topLevelComment, ...(t.replies?.comments || [])])
-        .map((c) => ({ c, isReply: !!c.snippet.parentId })), page.items)
+      const replyCounts = new Map(page.items.map((t) => [t.id, t.snippet.totalReplyCount || 0]))
+      const raw = page.items.flatMap((t) => [t.snippet.topLevelComment, ...(t.replies?.comments || [])])
+      const { inserted, newProspects } = await ingestComments(video, raw
+        // the creator's own replies aren't prospects; neither are authors without a channel
+        .filter((c) => c.snippet.authorChannelId?.value && c.snippet.authorChannelId.value !== video.channel.youtubeChannelId)
+        .map((c): IngestComment => ({
+          externalId: c.id,
+          authorExternalId: c.snippet.authorChannelId!.value,
+          authorName: c.snippet.authorDisplayName || 'Unknown',
+          avatarUrl: c.snippet.authorProfileImageUrl || null,
+          text: c.snippet.textOriginal || c.snippet.textDisplay || '',
+          likeCount: c.snippet.likeCount || 0,
+          replyCount: replyCounts.get(c.id) || 0,
+          parentId: c.snippet.parentId || null,
+          publishedAt: c.snippet.publishedAt ? new Date(c.snippet.publishedAt) : null,
+        })))
       out.newComments += inserted
       out.newProspects += newProspects
 
@@ -75,39 +96,75 @@ export async function collectComments(deadline: number): Promise<CollectResult> 
       })
       if (done) { out.videosDone++; break }
     }
-    if (left(deadline) <= 8_000) break
   }
   return out
 }
 
-async function ingestThreads(
-  video: { id: string; title: string; interestCategory: string | null; channel: { youtubeChannelId: string } },
-  comments: Array<{ c: YtComment; isReply: boolean }>,
-  threads: Array<{ id: string; snippet: { totalReplyCount?: number } }>,
-) {
-  const replyCounts = new Map(threads.map((t) => [t.id, t.snippet.totalReplyCount || 0]))
-  // The creator's own replies aren't prospects; neither are authors without a channel
-  const usable = comments.filter(({ c }) => c.snippet.authorChannelId?.value && c.snippet.authorChannelId.value !== video.channel.youtubeChannelId)
-  if (!usable.length) return { inserted: 0, newProspects: 0 }
+/** A Hacker News thread arrives whole in one free call */
+async function collectHnStory(video: IngestVideo & { youtubeVideoId: string; commentsCollected: number; maxComments: number }, out: CollectResult) {
+  try {
+    const { story, comments } = await storyComments(video.youtubeVideoId.replace(/^hn:/, ''))
+    out.pages++
+    const rows: IngestComment[] = comments.slice(0, video.maxComments).map((c) => ({
+      externalId: `hn:${c.id}`,
+      authorExternalId: `hn:${c.author}`,
+      authorName: c.author,
+      avatarUrl: null,
+      text: c.text,
+      likeCount: c.points,
+      replyCount: 0,
+      parentId: c.parentId ? `hn:${c.parentId}` : null,
+      publishedAt: c.createdAt,
+    }))
+    // A "Show HN" author is a builder by definition: their post counts as a comment
+    if (story?.author && /^(show|launch) hn/i.test(story.title)) {
+      rows.push({
+        externalId: `hn:${video.youtubeVideoId.replace(/^hn:/, '')}:op`, authorExternalId: `hn:${story.author}`, authorName: story.author, avatarUrl: null,
+        text: `I'm building this: ${story.title}. ${story.text}`.trim(), likeCount: 0, replyCount: 0, parentId: null, publishedAt: null,
+      })
+    }
+    const { inserted, newProspects } = await ingestComments(video, rows)
+    out.newComments += inserted
+    out.newProspects += newProspects
+    await prisma.audienceVideo.update({
+      where: { id: video.id },
+      data: { commentsCollected: video.commentsCollected + inserted, status: 'DONE', lastCollectedAt: new Date(), lastError: null },
+    })
+    out.videosDone++
+  } catch (err) {
+    await prisma.audienceVideo.update({ where: { id: video.id }, data: { status: 'ERROR', lastError: (err as Error).message.slice(0, 300) } })
+    out.errors.push(`${video.title}: ${(err as Error).message}`)
+  }
+}
 
-  const known = await prisma.audienceComment.findMany({ where: { youtubeCommentId: { in: usable.map(({ c }) => c.id) } }, select: { youtubeCommentId: true } })
+interface IngestVideo { id: string; title: string; platform: string; interestCategory: string | null }
+interface IngestComment {
+  externalId: string; authorExternalId: string; authorName: string; avatarUrl: string | null
+  text: string; likeCount: number; replyCount: number; parentId: string | null; publishedAt: Date | null
+}
+
+/** Store new comments (each exactly once), create one prospect per author, re-score them */
+async function ingestComments(video: IngestVideo, comments: IngestComment[]) {
+  if (!comments.length) return { inserted: 0, newProspects: 0 }
+  const known = await prisma.audienceComment.findMany({ where: { youtubeCommentId: { in: comments.map((c) => c.externalId) } }, select: { youtubeCommentId: true } })
   const seen = new Set(known.map((k) => k.youtubeCommentId))
-  const fresh = usable.filter(({ c }) => !seen.has(c.id))
+  const fresh = comments.filter((c) => !seen.has(c.externalId))
   if (!fresh.length) return { inserted: 0, newProspects: 0 }
 
-  // Prospects: one per commenter channel, however many comments they left
-  const authors = new Map<string, YtComment>()
-  for (const { c } of fresh) authors.set(c.snippet.authorChannelId!.value, c)
-  const existing = await prisma.prospect.findMany({ where: { youtubeChannelId: { in: [...authors.keys()] } }, select: { id: true, youtubeChannelId: true } })
+  // Prospects: one per author, however many comments they left
+  const authors = new Map<string, IngestComment>()
+  for (const c of fresh) authors.set(c.authorExternalId, c)
+  const existing = await prisma.prospect.findMany({ where: { youtubeChannelId: { in: [...authors.keys()] } }, select: { youtubeChannelId: true } })
   const have = new Set(existing.map((p) => p.youtubeChannelId))
   const toCreate = [...authors.entries()].filter(([id]) => !have.has(id)).map(([id, c]) => {
-    const display = c.snippet.authorDisplayName || 'Unknown'
-    const name = parseName(display)
+    const name = parseName(c.authorName)
     return {
       youtubeChannelId: id,
-      displayName: display.replace(/^@/, ''),
-      handle: display.startsWith('@') ? display : null,
-      avatarUrl: c.snippet.authorProfileImageUrl || null,
+      platform: video.platform,
+      profileUrl: video.platform === 'HN' ? hnUserUrl(c.authorName) : null,
+      displayName: c.authorName.replace(/^@/, ''),
+      handle: video.platform === 'YOUTUBE' ? (c.authorName.startsWith('@') ? c.authorName : null) : c.authorName,
+      avatarUrl: c.avatarUrl,
       firstName: name.firstName || null,
       lastName: name.lastName || null,
     }
@@ -116,21 +173,20 @@ async function ingestThreads(
   const all = await prisma.prospect.findMany({ where: { youtubeChannelId: { in: [...authors.keys()] } }, select: { id: true, youtubeChannelId: true } })
   const idOf = new Map(all.map((p) => [p.youtubeChannelId, p.id]))
 
-  const rows: Prisma.AudienceCommentCreateManyInput[] = fresh.map(({ c, isReply }) => {
-    const text = c.snippet.textOriginal || c.snippet.textDisplay || ''
-    const v = classifyComment(text, { likeCount: c.snippet.likeCount, videoInterest: video.interestCategory, authorName: c.snippet.authorDisplayName })
+  const rows: Prisma.AudienceCommentCreateManyInput[] = fresh.map((c) => {
+    const v = classifyComment(c.text, { likeCount: c.likeCount, videoInterest: video.interestCategory, authorName: c.authorName })
     return {
-      youtubeCommentId: c.id,
+      youtubeCommentId: c.externalId,
       videoId: video.id,
-      prospectId: idOf.get(c.snippet.authorChannelId!.value) || null,
-      authorChannelId: c.snippet.authorChannelId!.value,
-      authorName: c.snippet.authorDisplayName || 'Unknown',
-      text: text.slice(0, 5000),
-      likeCount: c.snippet.likeCount || 0,
-      replyCount: replyCounts.get(c.id) || 0,
-      isReply,
-      parentCommentId: c.snippet.parentId || null,
-      publishedAt: c.snippet.publishedAt ? new Date(c.snippet.publishedAt) : null,
+      prospectId: idOf.get(c.authorExternalId) || null,
+      authorChannelId: c.authorExternalId,
+      authorName: c.authorName,
+      text: c.text.slice(0, 5000),
+      likeCount: c.likeCount,
+      replyCount: c.replyCount,
+      isReply: !!c.parentId,
+      parentCommentId: c.parentId,
+      publishedAt: c.publishedAt,
       language: v.language,
       relevance: v.relevance,
       score: v.score,
@@ -182,6 +238,11 @@ export async function refreshProspects(ids: string[]) {
       hasWebsite: !!p.website,
     })
     const identity = computeIdentity(p)
+    const place = inferCountry({
+      existing: { country: p.country, source: p.countrySource, confidence: p.countryConfidence },
+      linkedIn: p.linkedIn, website: p.website, location: p.location,
+      texts: [p.channelDescription || '', p.bio || '', ...list.slice(0, 20).map((c) => c.text)],
+    })
     const videos = [...new Set(nonSpam.map((c) => c.video.title))]
     const reason = nonSpam.length
       ? `${evidence.slice(0, 3).join('; ') || 'Engaged comment'} · on ${videos.length === 1 ? `"${videos[0].slice(0, 70)}" (${best.video.channel.title})` : `${videos.length} videos`}`
@@ -191,6 +252,10 @@ export async function refreshProspects(ids: string[]) {
     const data: Prisma.ProspectUpdateInput = {
       commentCount: list.length, lastSeenAt: new Date(), bestCommentId: best.id,
       intentScore: intent, intentEvidence: evidence, identityScore: identity, score: intent,
+      ...(place && (place.country !== p.country || place.confidence !== p.countryConfidence) ? {
+        country: place.country, countrySource: place.source, countryConfidence: place.confidence,
+        region: regionOf(place.country), consentSensitive: CONSENT_SENSITIVE.has(place.country),
+      } : {}),
     }
     if (!p.aiCheckedAt) {
       Object.assign(data, {
@@ -277,18 +342,27 @@ export async function enrichProspects(deadline: number, settings: AudienceSettin
   // people who upload, their latest videos (1 unit each) and those videos' descriptions (1 unit/50).
   // Creators list "business inquiries" addresses and their sites there.
   const own = new Map<string, OwnVideos>()
-  if (youtubeConfigured()) {
+  for (const p of batch.filter((x) => x.platform === 'HN')) {
+    const u = await hnUser(p.youtubeChannelId.replace(/^hn:/, ''))
+    if (u) p.channelDescription = u.about || null
+  }
+  const ytBatch = batch.filter((x) => x.platform !== 'HN')
+  if (youtubeConfigured() && ytBatch.length) {
     try {
-      const channels = await getChannels(batch.map((p) => p.youtubeChannelId))
+      const channels = await getChannels(ytBatch.map((p) => p.youtubeChannelId))
       const byId = new Map(channels.map((c) => [c.id, c]))
       const uploads: Array<{ prospectId: string; playlist: string }> = []
-      for (const p of batch) {
+      for (const p of ytBatch) {
         const c = byId.get(p.youtubeChannelId)
         if (!c) continue
         p.channelDescription = c.snippet.description || null
         p.subscriberCount = Number(c.statistics?.subscriberCount || 0)
         p.videoCount = Number(c.statistics?.videoCount || 0)
-        p.country = c.snippet.country || p.country
+        if (c.snippet.country && (p.countryConfidence || 0) < 80) {
+          p.country = c.snippet.country
+          p.countrySource = 'CHANNEL'
+          p.countryConfidence = 80
+        }
         p.handle = c.snippet.customUrl || p.handle
         const playlist = c.contentDetails?.relatedPlaylists?.uploads
         if (p.videoCount > 0 && playlist) uploads.push({ prospectId: p.id, playlist })
@@ -342,7 +416,12 @@ async function enrichOne(p: Prospect & { comments: Array<{ text: string }> }, de
     firstName = n.firstName || null
     lastName = n.lastName || null
   }
-  const country = (p.country || f.country || null)?.toUpperCase() || null
+  const place = inferCountry({
+    existing: { country: p.country, source: p.countrySource, confidence: p.countryConfidence },
+    website: p.website || f.website, linkedIn: p.linkedIn || f.linkedIn, location: p.location || f.location,
+    texts: [p.channelDescription || '', ...(ownVideos?.videos || []).slice(0, 3).map((v) => v.text)],
+  })
+  const country = place?.country || null
 
   // Guessed addresses only when a verifier can confirm them, on a domain the person owns
   const domain = f.website ? hostOf(f.website) : ''
@@ -369,6 +448,8 @@ async function enrichOne(p: Prospect & { comments: Array<{ text: string }> }, de
       handle: p.handle,
       firstName, lastName,
       country,
+      countrySource: place?.source || null,
+      countryConfidence: place?.confidence || 0,
       region: regionOf(country),
       consentSensitive: !!country && CONSENT_SENSITIVE.has(country),
       website: p.website || f.website || null,
@@ -522,7 +603,7 @@ export async function finderStep(deadline: number, settings: AudienceSettings, o
               linkedIn: p.linkedIn || who.linkedIn || null,
               twitter: p.twitter || who.twitter || null,
               location: p.location || who.city || null,
-              ...(!p.country && who.country ? { country: who.country.toUpperCase(), region: regionOf(who.country), consentSensitive: CONSENT_SENSITIVE.has(who.country.toUpperCase()) } : {}),
+              ...(who.country && p.countryConfidence < 85 ? { country: who.country.toUpperCase(), countrySource: 'HUNTER', countryConfidence: 85, region: regionOf(who.country), consentSensitive: CONSENT_SENSITIVE.has(who.country.toUpperCase()) } : {}),
             },
           })
           Object.assign(p, { website, firstName: p.firstName || who.firstName, lastName: p.lastName || who.lastName, company: p.company || who.companyName, linkedIn: p.linkedIn || who.linkedIn })

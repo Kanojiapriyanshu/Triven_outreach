@@ -15,7 +15,7 @@ export async function GET(_: NextRequest, { params }: { params: Promise<{ id: st
     where: { id },
     include: {
       emails: { orderBy: [{ isPrimary: 'desc' }, { createdAt: 'asc' }] },
-      comments: { orderBy: { score: 'desc' }, take: 50, include: { video: { select: { title: true, youtubeVideoId: true, channel: { select: { title: true } } } } } },
+      comments: { orderBy: { score: 'desc' }, take: 50, include: { video: { select: { title: true, youtubeVideoId: true, platform: true, channel: { select: { title: true } } } } } },
       lead: { select: { id: true, status: true, firstEmailSentAt: true, hasReplied: true, campaign: { select: { id: true, name: true } } } },
     },
   })

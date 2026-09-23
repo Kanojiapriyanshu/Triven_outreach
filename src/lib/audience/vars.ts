@@ -2,6 +2,7 @@
 import { INTERESTS, type Interest } from './taxonomy'
 
 export interface AudienceLeadFields {
+  sourcePlatform?: string | null
   sourceChannel?: string | null
   sourceVideo?: string | null
   commentTopic?: string | null
@@ -39,7 +40,9 @@ export function audienceVars(lead: AudienceLeadFields, firstName: string): Recor
   const interest = INTERESTS[(lead.interestCategory || 'GENERAL_AI') as Interest] || INTERESTS.GENERAL_AI
 
   // "I came across your comment on Liam's video "How I built…" about building voice agents."
-  const where = channel && video ? `on ${channel}'s video "${video}"` : video ? `on "${video}"` : channel ? `on one of ${channel}'s videos` : ''
+  const where = lead.sourcePlatform === 'HN'
+    ? (video ? `in the Hacker News thread "${video}"` : 'on Hacker News')
+    : channel && video ? `on ${channel}'s video "${video}"` : video ? `on "${video}"` : channel ? `on one of ${channel}'s videos` : ''
   const commentHook = where
     ? `{I came across|I saw|I was reading} your comment ${where}${topic ? ` about ${topic}` : ''}.`
     : topic ? `{I came across|I saw} a comment of yours about ${topic}.` : ''

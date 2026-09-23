@@ -19,6 +19,7 @@ export async function GET() {
 const schema = z.object({
   input: z.string().trim().min(2, 'Paste a video or channel link, an @handle, or a search phrase'),
   queue: z.boolean().optional(),
+  regionCode: z.string().length(2).optional().or(z.literal('')),
 })
 
 /** Add a video (optionally straight into the collection queue), a channel, or search channels */
@@ -28,7 +29,7 @@ export async function POST(req: NextRequest) {
   const parsed = schema.safeParse(await req.json())
   if (!parsed.success) return NextResponse.json({ error: parsed.error.errors[0]?.message }, { status: 400 })
   try {
-    const r = await addFromInput(parsed.data.input, { queue: parsed.data.queue })
+    const r = await addFromInput(parsed.data.input, { queue: parsed.data.queue, regionCode: parsed.data.regionCode || undefined })
     return NextResponse.json({ ...r, channels: r.channels.map((c) => ({ ...c, viewCount: Number(c.viewCount) })) })
   } catch (err) {
     return NextResponse.json({ error: (err as Error).message }, { status: 400 })
