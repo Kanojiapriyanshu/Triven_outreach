@@ -19,6 +19,8 @@ const settingsSchema = z.object({
   minGapMinutes: z.number().int().min(1).max(240),
   maxGapMinutes: z.number().int().min(1).max(240),
   demoPhone: z.string().trim().max(40).regex(/^[+\d\s().-]*$/, 'Phone number can only contain digits, spaces, + ( ) -').default(''),
+  builderUrl: z.string().trim().max(200).refine((u) => !u || /^https:\/\/[^\s]+$/.test(u), 'Use a full https:// link').default(''),
+  senderAddress: z.string().trim().max(200).default(''),
 }).refine((s) => s.minGapMinutes <= s.maxGapMinutes, { message: 'Minimum gap must be less than the maximum' })
 
 export async function GET() {

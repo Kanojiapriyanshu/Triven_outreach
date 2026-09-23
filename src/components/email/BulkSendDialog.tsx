@@ -29,7 +29,7 @@ export default function BulkSendDialog({ leads, onClose, onDone }: { leads: Bulk
   const { data: templatesData } = useSWR<Template[]>('/api/templates?type=FIRST_EMAIL', fetcher)
   const { data: sendersData } = useSWR<Sender[]>('/api/sender-accounts', fetcher)
   const { data: allowance } = useSWR<Record<string, { left: number; limit: number; warmingUp: boolean }>>('/api/sender-accounts/allowance', fetcher)
-  const { data: settings } = useSWR<{ sendWindow: SendWindow; demoPhone?: string; minGapMinutes: number; maxGapMinutes: number }>('/api/settings', fetcher)
+  const { data: settings } = useSWR<{ sendWindow: SendWindow; demoPhone?: string; builderUrl?: string; senderAddress?: string; minGapMinutes: number; maxGapMinutes: number }>('/api/settings', fetcher)
   const templates = Array.isArray(templatesData) ? templatesData : []
   const connected = (Array.isArray(sendersData) ? sendersData : []).filter((s) => s.gmailStatus === 'CONNECTED')
 
@@ -54,7 +54,7 @@ export default function BulkSendDialog({ leads, onClose, onDone }: { leads: Bulk
   const previews = useMemo(() => eligible.map((lead, i) => {
     const t = templateId === EACH ? pickDefaultTemplate(templates, 'FIRST_EMAIL', lead.campaignId) : templates.find((x) => x.id === templateId)
     const sender = connected.find((s) => s.id === inboxes[i % Math.max(1, inboxes.length)])
-    const vars = buildTemplateVars(lead, sender, { demoPhone: settings?.demoPhone })
+    const vars = buildTemplateVars(lead, sender, { demoPhone: settings?.demoPhone, builderUrl: settings?.builderUrl, senderAddress: settings?.senderAddress })
     return {
       lead,
       template: t,
@@ -63,7 +63,7 @@ export default function BulkSendDialog({ leads, onClose, onDone }: { leads: Bulk
       body: t ? renderTemplate(t.body, vars) : '',
       check: checkLeadData(lead, vars),
     }
-  }), [eligible, templateId, templates, connected, inboxes, settings?.demoPhone])
+  }), [eligible, templateId, templates, connected, inboxes, settings?.demoPhone, settings?.builderUrl, settings?.senderAddress])
 
   const thin = previews.filter((p) => p.check.level === 'thin').length
   const noTemplate = previews.filter((p) => !p.template).length

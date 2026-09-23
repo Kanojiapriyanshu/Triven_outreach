@@ -3,12 +3,15 @@
  * Background worker endpoint, called by GitHub Actions (or any cron) every ~5 minutes.
  * Authenticated by the X-Worker-Secret header (never a user session).
  *
- * Body: { action: 'tick' | 'send' | 'check_replies' }
- *   tick = check replies, then let every free inbox send one email
+ * Body: { action: 'tick' | 'send' | 'check_replies' | 'audience' }
+ *   tick     = check replies, then let every free inbox send one email
+ *   audience = YouTube audience pipeline (collect → AI review → enrich → verify)
  */
 import { NextRequest, NextResponse } from 'next/server'
 import { checkAllReplies } from '@/lib/replies'
 import { runSequencer } from '@/lib/sequencer'
+import { runAudiencePipeline } from '@/lib/audience/pipeline'
+import { getAudienceSettings } from '@/lib/audience/settings'
 
 export const maxDuration = 60
 
@@ -41,6 +44,12 @@ export async function POST(req: NextRequest) {
     const replies = await checkAllReplies(started + 20_000)
     const results = await runSequencer(started + 52_000)
     return NextResponse.json({ ok: true, action, replies, results, processedAt })
+  }
+
+  if (action === 'audience') {
+    if (!(await getAudienceSettings()).autoRun) return NextResponse.json({ ok: true, action, skipped: 'auto-run is off', processedAt })
+    const results = await runAudiencePipeline(started + 50_000)
+    return NextResponse.json({ ok: true, action, results, processedAt })
   }
 
   return NextResponse.json({ error: `Unknown action: ${action}` }, { status: 400 })

@@ -16,7 +16,7 @@ jobs:
   tick:
     name: Check replies & send next emails
     runs-on: ubuntu-latest
-    timeout-minutes: 3
+    timeout-minutes: 5
 
     steps:
       - name: Run worker tick
@@ -43,4 +43,24 @@ jobs:
           if [ "$HTTP_CODE" != "200" ]; then
             echo "::error::Worker returned HTTP $HTTP_CODE"
             exit 1
+          fi
+
+      - name: Run audience pipeline (YouTube → prospects)
+        # Separate call so a slow website crawl never delays sending
+        if: always()
+        env:
+          APP_URL: ${{ secrets.APP_URL }}
+          WORKER_SECRET: ${{ secrets.WORKER_SECRET }}
+        run: |
+          RESPONSE=$(curl -sS --max-time 90 -w "\n%{http_code}" \
+            -X POST "${APP_URL%/}/api/worker" \
+            -H "Content-Type: application/json" \
+            -H "x-worker-secret: $WORKER_SECRET" \
+            -d '{"action":"audience"}')
+
+          HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+          echo "HTTP $HTTP_CODE"
+          echo "$RESPONSE" | head -n-1
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "::warning::Audience pipeline returned HTTP $HTTP_CODE"
           fi

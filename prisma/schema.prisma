@@ -50,10 +50,10 @@ model SenderAccount {
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
 
-  leads                 Lead[]
+  leads                  Lead[]
   campaignSenderAccounts CampaignSenderAccount[]
-  activities            Activity[]
-  followUpTasks         FollowUpTask[]
+  activities             Activity[]
+  followUpTasks          FollowUpTask[]
 
   @@map("sender_accounts")
 }
@@ -63,23 +63,23 @@ model SenderAccount {
 // ─────────────────────────────────────────────────────────────────────────────
 
 model Campaign {
-  id             String   @id @default(cuid())
+  id             String    @id @default(cuid())
   name           String
   industry       String
   targetCountry  String?
   targetLocation String?
   product        String?
-  description    String?  @db.Text
-  timezone       String   @default("America/New_York")
+  description    String?   @db.Text
+  timezone       String    @default("America/New_York")
   // Follow-up schedule: days after first email
-  followUpDay1   Int      @default(1)
-  followUpDay2   Int      @default(2)
-  followUpDay3   Int      @default(3)
-  isActive       Boolean  @default(true)
-  isPaused       Boolean  @default(false)
+  followUpDay1   Int       @default(1)
+  followUpDay2   Int       @default(2)
+  followUpDay3   Int       @default(3)
+  isActive       Boolean   @default(true)
+  isPaused       Boolean   @default(false)
   // Auto-sending (Instantly-style): only ACTIVE campaigns email their queued leads
   sendingStatus  String    @default("DRAFT") // DRAFT | ACTIVE | PAUSED
-  dailyNewLeads  Int       @default(30)      // max first emails per day for this campaign
+  dailyNewLeads  Int       @default(30) // max first emails per day for this campaign
   launchedAt     DateTime?
   // Campaign schedule (null = use the global Settings): window in the Settings timezone,
   // send days ("1,2,3,4,5" = Mon–Fri) and the gap between emails as inboxes take turns
@@ -88,8 +88,8 @@ model Campaign {
   sendDays       String?
   gapMinMinutes  Int?
   gapMaxMinutes  Int?
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
 
   leads          Lead[]
   senderAccounts CampaignSenderAccount[]
@@ -117,30 +117,30 @@ model Lead {
   id String @id @default(cuid())
 
   // Basic info
-  firstName   String?
-  lastName    String?
-  fullName    String?
-  jobTitle    String?
-  companyName String
-  website     String?
+  firstName    String?
+  lastName     String?
+  fullName     String?
+  jobTitle     String?
+  companyName  String
+  website      String?
   companyEmail String?
-  phone       String?
-  linkedIn    String?
-  country     String?
-  state       String?
-  city        String?
-  industry    String?
-  subIndustry String?
-  companySize String?
-  notes       String?  @db.Text
+  phone        String?
+  linkedIn     String?
+  country      String?
+  state        String?
+  city         String?
+  industry     String?
+  subIndustry  String?
+  companySize  String?
+  notes        String? @db.Text
 
   // Sales info
   campaignId      String?
-  leadSource      String   @default("MANUAL") // MANUAL|IMPORT|REFERRAL|WEBSITE|LINKEDIN|COLD_OUTREACH|OTHER
-  status          String   @default("NEW")
+  leadSource      String    @default("MANUAL") // MANUAL|IMPORT|REFERRAL|WEBSITE|LINKEDIN|COLD_OUTREACH|OTHER
+  status          String    @default("NEW")
   stage           String?
-  priority        String   @default("MEDIUM") // LOW|MEDIUM|HIGH|URGENT
-  score           Int      @default(0)
+  priority        String    @default("MEDIUM") // LOW|MEDIUM|HIGH|URGENT
+  score           Int       @default(0)
   assignedUserId  String?
   senderAccountId String?
   lastContactedAt DateTime?
@@ -159,35 +159,46 @@ model Lead {
 
   // Outreach
   firstEmailSubject String?
-  firstEmailBody    String? @db.Text
+  firstEmailBody    String?   @db.Text
   firstEmailSentAt  DateTime?
   followUp1Subject  String?
-  followUp1Body     String? @db.Text
+  followUp1Body     String?   @db.Text
   followUp1SentAt   DateTime?
   followUp2Subject  String?
-  followUp2Body     String? @db.Text
+  followUp2Body     String?   @db.Text
   followUp2SentAt   DateTime?
   followUp3Subject  String?
-  followUp3Body     String? @db.Text
+  followUp3Body     String?   @db.Text
   followUp3SentAt   DateTime?
 
   // Conversion
-  hasReplied    Boolean  @default(false)
-  isInterested  Boolean  @default(false)
-  demoSent      Boolean  @default(false)
+  hasReplied    Boolean   @default(false)
+  isInterested  Boolean   @default(false)
+  demoSent      Boolean   @default(false)
   demoDate      DateTime?
-  meetingBooked Boolean  @default(false)
+  meetingBooked Boolean   @default(false)
   meetingDate   DateTime?
-  proposalSent  Boolean  @default(false)
-  hasSale       Boolean  @default(false)
+  proposalSent  Boolean   @default(false)
+  hasSale       Boolean   @default(false)
   saleDate      DateTime?
-  dealValue     Decimal? @db.Decimal(12, 2)
+  dealValue     Decimal?  @db.Decimal(12, 2)
   lostReason    String?
+
+  // Audience source (YouTube prospects pushed into a campaign): why this person was contacted
+  prospectId       String? @unique
+  sourceChannel    String?
+  sourceVideo      String?
+  sourceVideoUrl   String?
+  sourceComment    String? @db.Text
+  commentTopic     String?
+  interestCategory String?
+  persona          String?
 
   // Metadata
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  prospect      Prospect?      @relation(fields: [prospectId], references: [id], onDelete: SetNull)
   campaign      Campaign?      @relation(fields: [campaignId], references: [id])
   assignedUser  User?          @relation(fields: [assignedUserId], references: [id])
   senderAccount SenderAccount? @relation(fields: [senderAccountId], references: [id])
@@ -214,7 +225,7 @@ model EmailTemplate {
   name       String
   subject    String
   body       String  @db.Text
-  type       String  // FIRST_EMAIL|FOLLOW_UP_1|FOLLOW_UP_2|FOLLOW_UP_3|OTHER
+  type       String // FIRST_EMAIL|FOLLOW_UP_1|FOLLOW_UP_2|FOLLOW_UP_3|OTHER
   campaignId String?
   isDefault  Boolean @default(false)
 
@@ -234,7 +245,7 @@ model FollowUpTask {
   id              String    @id @default(cuid())
   leadId          String
   senderAccountId String?
-  type            String    // FOLLOW_UP_1|FOLLOW_UP_2|FOLLOW_UP_3
+  type            String // FOLLOW_UP_1|FOLLOW_UP_2|FOLLOW_UP_3
   subject         String?
   body            String?   @db.Text
   scheduledAt     DateTime
@@ -261,7 +272,7 @@ model Activity {
   leadId          String
   userId          String?
   senderAccountId String?
-  type            String   // EMAIL_SENT|FOLLOW_UP_SENT|EMAIL_OPENED|EMAIL_REPLIED|CALL|DEMO_SENT|MEETING_BOOKED|STATUS_CHANGED|NOTE_ADDED|TASK_CREATED|SALE|OTHER
+  type            String // EMAIL_SENT|FOLLOW_UP_SENT|EMAIL_OPENED|EMAIL_REPLIED|CALL|DEMO_SENT|MEETING_BOOKED|STATUS_CHANGED|NOTE_ADDED|TASK_CREATED|SALE|OTHER
   title           String
   body            String?  @db.Text
   metadata        Json?
@@ -285,7 +296,7 @@ model EmailMessage {
   leadId         String
   gmailMessageId String?   @unique
   gmailThreadId  String?
-  direction      String    // OUTBOUND|INBOUND
+  direction      String // OUTBOUND|INBOUND
   subject        String?
   body           String?   @db.Text
   fromAddress    String?
@@ -310,7 +321,7 @@ model SuppressionEntry {
   id      String   @id @default(cuid())
   email   String?  @unique
   domain  String?
-  reason  String?  // UNSUBSCRIBED|BOUNCED|INVALID|DO_NOT_CONTACT|SPAM_COMPLAINT
+  reason  String? // UNSUBSCRIBED|BOUNCED|INVALID|DO_NOT_CONTACT|SPAM_COMPLAINT
   addedAt DateTime @default(now())
 
   @@index([email])
@@ -325,7 +336,7 @@ model SuppressionEntry {
 model Import {
   id            String   @id @default(cuid())
   fileName      String
-  fileType      String   // CSV|XLSX
+  fileType      String // CSV|XLSX
   totalRows     Int      @default(0)
   validRows     Int      @default(0)
   importedRows  Int      @default(0)
@@ -366,7 +377,7 @@ model ImportRow {
 model Notification {
   id        String   @id @default(cuid())
   userId    String?
-  type      String   // REPLY|FOLLOW_UP_DUE|FOLLOW_UP_OVERDUE|MEETING|DEMO|IMPORT_DONE|IMPORT_ERROR|GMAIL_ERROR
+  type      String // REPLY|FOLLOW_UP_DUE|FOLLOW_UP_OVERDUE|MEETING|DEMO|IMPORT_DONE|IMPORT_ERROR|GMAIL_ERROR
   title     String
   body      String?
   isRead    Boolean  @default(false)
@@ -390,4 +401,180 @@ model Setting {
   updatedAt DateTime @updatedAt
 
   @@map("settings")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// AUDIENCE DISCOVERY (YouTube → commenters → verified prospects)
+// ─────────────────────────────────────────────────────────────────────────────
+
+// A YouTube channel whose audience we mine (e.g. an AI-automation creator)
+model AudienceChannel {
+  id               String    @id @default(cuid())
+  youtubeChannelId String    @unique
+  title            String
+  handle           String?
+  description      String?   @db.Text
+  thumbnailUrl     String?
+  country          String?
+  subscriberCount  Int       @default(0)
+  videoCount       Int       @default(0)
+  viewCount        BigInt    @default(0)
+  uploadsPlaylist  String?
+  topicScore       Int       @default(0) // how on-topic the channel is for Triven (0-100)
+  isTracked        Boolean   @default(true)
+  lastScannedAt    DateTime?
+  notes            String?   @db.Text
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  videos AudienceVideo[]
+
+  @@map("audience_channels")
+}
+
+model AudienceVideo {
+  id                String    @id @default(cuid())
+  youtubeVideoId    String    @unique
+  channelId         String
+  title             String
+  description       String?   @db.Text
+  thumbnailUrl      String?
+  publishedAt       DateTime?
+  durationSeconds   Int       @default(0)
+  language          String?
+  viewCount         Int       @default(0)
+  likeCount         Int       @default(0)
+  commentCount      Int       @default(0)
+  score             Int       @default(0) // audience-fit score (0-100)
+  scoreReasons      String?   @db.Text
+  interestCategory  String? // topic of the video → default interest of its commenters
+  status            String    @default("DISCOVERED") // DISCOVERED | QUEUED | COLLECTING | DONE | SKIPPED | ERROR
+  commentsCollected Int       @default(0)
+  maxComments       Int       @default(2000)
+  nextPageToken     String?
+  lastError         String?
+  lastCollectedAt   DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  channel  AudienceChannel   @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  comments AudienceComment[]
+
+  @@index([channelId])
+  @@index([status])
+  @@map("audience_videos")
+}
+
+// One public comment. youtubeCommentId makes collection idempotent (never processed twice)
+model AudienceComment {
+  id               String    @id @default(cuid())
+  youtubeCommentId String    @unique
+  videoId          String
+  prospectId       String?
+  authorChannelId  String?
+  authorName       String
+  text             String    @db.Text
+  likeCount        Int       @default(0)
+  replyCount       Int       @default(0)
+  isReply          Boolean   @default(false)
+  parentCommentId  String?
+  publishedAt      DateTime?
+  language         String?
+  relevance        String    @default("LOW") // HIGH | MEDIUM | LOW | SPAM
+  score            Int       @default(0)
+  persona          String?
+  interestCategory String?
+  topic            String? // "building voice agents for clinics"
+  signals          String[]  @default([])
+  classifiedBy     String    @default("RULES") // RULES | AI
+  createdAt        DateTime  @default(now())
+
+  video    AudienceVideo @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  prospect Prospect?     @relation(fields: [prospectId], references: [id], onDelete: Cascade)
+
+  @@index([videoId])
+  @@index([prospectId])
+  @@index([relevance])
+  @@map("audience_comments")
+}
+
+// A person, keyed by their YouTube channel id: commenting on 5 videos is still one prospect
+model Prospect {
+  id                 String    @id @default(cuid())
+  youtubeChannelId   String    @unique
+  displayName        String
+  firstName          String?
+  lastName           String?
+  handle             String?
+  avatarUrl          String?
+  channelDescription String?   @db.Text
+  subscriberCount    Int       @default(0)
+  videoCount         Int       @default(0)
+  country            String?
+  region             String? // AMERICAS | EUROPE | MIDDLE_EAST_AFRICA | ASIA_PACIFIC
+  company            String?
+  jobTitle           String?
+  website            String?
+  linkedIn           String?
+  twitter            String?
+  github             String?
+  otherLinks         String[]  @default([])
+  location           String?
+  bio                String?   @db.Text
+  persona            String? // FOUNDER | AGENCY | CONSULTANT | DEVELOPER | BUSINESS_OWNER | FREELANCER | TECH_PRO | ENTHUSIAST
+  interestCategory   String? // AI_RECEPTIONIST | AI_SALES | AI_DEVELOPMENT | AI_AUTOMATION | GENERAL_AI
+  relevance          String    @default("LOW") // HIGH | MEDIUM | LOW | SPAM
+  score              Int       @default(0)
+  reason             String?   @db.Text // why this person was selected
+  topic              String? // what they talked about, for personalisation
+  icebreaker         String?   @db.Text // one line reacting to their comment (AI pass)
+  bestCommentId      String?
+  commentCount       Int       @default(0)
+  status             String    @default("NEW")
+  // NEW | RESEARCHING | PROFILE_FOUND | EMAIL_FOUND | EMAIL_VERIFIED | READY_TO_CONTACT | NO_CONTACT
+  // | IN_CAMPAIGN | INVALID_EMAIL | DO_NOT_CONTACT
+  consentSensitive   Boolean   @default(false) // EU/UK/CA/AU/NZ: stricter outreach rules
+  aiCheckedAt        DateTime?
+  enrichedAt         DateTime?
+  enrichAttempts     Int       @default(0)
+  enrichNotes        String?   @db.Text
+  firstSeenAt        DateTime  @default(now())
+  lastSeenAt         DateTime  @default(now())
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  comments AudienceComment[]
+  emails   ProspectEmail[]
+  lead     Lead?
+
+  @@index([relevance])
+  @@index([status])
+  @@index([score])
+  @@index([interestCategory])
+  @@index([persona])
+  @@index([country])
+  @@map("prospects")
+}
+
+// Several addresses per person; an address belongs to exactly one person
+model ProspectEmail {
+  id           String    @id @default(cuid())
+  prospectId   String
+  email        String    @unique
+  source       String // CHANNEL | COMMENT | WEBSITE | GITHUB | LINK_PAGE | PATTERN | MANUAL
+  sourceUrl    String?
+  status       String    @default("UNKNOWN") // VERIFIED | RISKY | UNKNOWN | INVALID
+  verifyMethod String? // MX | ZEROBOUNCE | NEVERBOUNCE | MILLIONVERIFIER | REOON | BOUNCE
+  verifyDetail String?
+  isPrimary    Boolean   @default(false)
+  isRole       Boolean   @default(false)
+  isFree       Boolean   @default(false)
+  checkedAt    DateTime?
+  createdAt    DateTime  @default(now())
+
+  prospect Prospect @relation(fields: [prospectId], references: [id], onDelete: Cascade)
+
+  @@index([prospectId])
+  @@index([status])
+  @@map("prospect_emails")
 }

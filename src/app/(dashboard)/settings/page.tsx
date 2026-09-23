@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Clock, Shield, Repeat, Trash2, Phone } from 'lucide-react'
+import { Clock, Shield, Repeat, Trash2, Phone, Link2 } from 'lucide-react'
 import { DEFAULT_SEND_WINDOW, describeWindow, windowInZone, type SendWindow } from '@/lib/send-window'
 import { fmtDate } from '@/lib/utils'
 
@@ -19,10 +19,12 @@ interface Settings {
   minGapMinutes: number
   maxGapMinutes: number
   demoPhone: string
+  builderUrl: string
+  senderAddress: string
 }
 
 const DEFAULTS: Settings = {
-  sendWindow: DEFAULT_SEND_WINDOW, followUpDays: [3, 7, 14], dailyCapPerSender: 40, minGapMinutes: 8, maxGapMinutes: 15, demoPhone: '',
+  sendWindow: DEFAULT_SEND_WINDOW, followUpDays: [3, 7, 14], dailyCapPerSender: 40, minGapMinutes: 8, maxGapMinutes: 15, demoPhone: '', builderUrl: '', senderAddress: '',
 }
 
 const ZONES = [
@@ -203,6 +205,32 @@ export default function SettingsPage() {
             className="max-w-xs"
           />
           {!form.demoPhone && <p className="text-xs text-amber-600 mt-1.5">Not set: emails that use it fall back to offering to set up a demo.</p>}
+        </CardContent>
+      </Card>
+
+      {/* AI Builder link + footer */}
+      <Card>
+        <CardHeader>
+          <div className="flex items-center gap-2">
+            <Link2 className="h-4 w-4 text-indigo-600" />
+            <CardTitle>AI Builder Link &amp; Footer</CardTitle>
+          </div>
+          <CardDescription>
+            Used by the AI Builder (YouTube audience) sequences. {'{{builderUrl}}'} only appears in the last follow-up, because links in a first cold email hurt inbox placement.
+            {' '}{'{{senderAddress}}'} is the postal address in the footer, which the US, Canada and Australia require in commercial email.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div>
+            <Label>Try-it link</Label>
+            <Input value={form.builderUrl} onChange={(e) => setForm((f) => ({ ...f, builderUrl: e.target.value }))} placeholder="https://triven.ai/builder" className="mt-1 max-w-md" />
+            {!form.builderUrl && <p className="text-xs text-amber-600 mt-1.5">Not set: the last follow-up asks them to reply for access instead.</p>}
+          </div>
+          <div>
+            <Label>Postal address</Label>
+            <Input value={form.senderAddress} onChange={(e) => setForm((f) => ({ ...f, senderAddress: e.target.value }))} placeholder="Triven AI, 123 Street, City, Country" className="mt-1 max-w-md" />
+            {!form.senderAddress && <p className="text-xs text-amber-600 mt-1.5">Not set: add one before emailing the US, Canada or Australia.</p>}
+          </div>
         </CardContent>
       </Card>
 

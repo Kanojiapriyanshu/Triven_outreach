@@ -14,6 +14,9 @@ import {
   Zap,
   LogOut,
   Inbox,
+  Radar,
+  Telescope,
+  UserSearch,
 } from 'lucide-react'
 import useSWR from 'swr'
 import { cn } from '@/lib/utils'
@@ -24,6 +27,9 @@ const navItems = [
   { label: 'Inbox', href: '/inbox', icon: Inbox },
   { label: 'Campaigns', href: '/campaigns', icon: Megaphone },
   { label: 'Leads', href: '/leads', icon: Users },
+  { label: 'Audience', href: '/audience', icon: Radar, exact: true },
+  { label: 'Discover', href: '/audience/discover', icon: Telescope, child: true },
+  { label: 'Prospects', href: '/audience/prospects', icon: UserSearch, child: true },
   { label: "Today's Work", href: '/today', icon: CalendarCheck },
   { label: 'Templates', href: '/templates', icon: FileText },
   { label: 'Import', href: '/imports', icon: Upload },
@@ -57,14 +63,16 @@ export default function Sidebar() {
 
       {/* Nav */}
       <nav className="flex-1 px-3 py-4 space-y-0.5 overflow-y-auto">
-        {navItems.map(({ label, href, icon: Icon }) => {
-          const isActive = href === '/' ? pathname === '/' : pathname.startsWith(href)
+        {navItems.map(({ label, href, icon: Icon, ...item }) => {
+          const exact = 'exact' in item && item.exact
+          const isActive = href === '/' || exact ? pathname === href : pathname.startsWith(href)
           return (
             <Link
               key={href}
               href={href}
               className={cn(
                 'flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors',
+                'child' in item && item.child && 'ml-5 py-1.5 text-[13px]',
                 isActive
                   ? 'bg-indigo-600 text-white'
                   : 'text-slate-400 hover:bg-slate-800 hover:text-white',

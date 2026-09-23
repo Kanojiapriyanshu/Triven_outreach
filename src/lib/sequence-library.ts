@@ -1,6 +1,7 @@
 // Ready-made 4-step sequences per niche. Plain text, no links, one question each:
 // short, specific emails that are easy to answer get the most replies and land in the inbox.
 // Follow-ups are sent as replies in the same thread, so they have no subject.
+import { AI_BUILDER_SEQUENCES } from './audience/sequences'
 
 export interface LibraryStep {
   type: 'FIRST_EMAIL' | 'FOLLOW_UP_1' | 'FOLLOW_UP_2' | 'FOLLOW_UP_3'
@@ -20,6 +21,7 @@ const SIGN = `{{senderFirstName}}
 Triven`
 
 export const SEQUENCE_LIBRARY: LibrarySequence[] = [
+  ...AI_BUILDER_SEQUENCES,
   {
     id: 'dental',
     niche: 'Dental practices',

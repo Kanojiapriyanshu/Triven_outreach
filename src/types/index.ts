@@ -33,6 +33,7 @@ export type LeadSource =
   | 'WEBSITE'
   | 'LINKEDIN'
   | 'COLD_OUTREACH'
+  | 'YOUTUBE'
   | 'OTHER'
 
 export type ActivityType =
@@ -177,6 +178,14 @@ export interface LeadRow {
   saleDate: string | null
   dealValue: string | null
   lostReason: string | null
+  prospectId?: string | null
+  sourceChannel?: string | null
+  sourceVideo?: string | null
+  sourceVideoUrl?: string | null
+  sourceComment?: string | null
+  commentTopic?: string | null
+  interestCategory?: string | null
+  persona?: string | null
   createdAt: string
   updatedAt: string
   campaign?: { id: string; name: string } | null

@@ -96,8 +96,8 @@ export async function deliverEmail(opts: {
   auto?: boolean
 }) {
   const { lead, sender, kind } = opts
-  const { demoPhone } = await getSettings()
-  const vars = buildTemplateVars(lead, sender, { demoPhone })
+  const { demoPhone, builderUrl, senderAddress } = await getSettings()
+  const vars = buildTemplateVars(lead, sender, { demoPhone, builderUrl, senderAddress })
   const subject = renderTemplate(opts.subject, vars)
   const body = renderTemplate(opts.body, vars)
 

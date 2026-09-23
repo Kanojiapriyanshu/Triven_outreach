@@ -1,8 +1,9 @@
 // Template personalization shared by the browser (preview) and the server (sending).
 // Keep this file free of server-only imports.
 import { signalVars, cleanCompanyName } from './signals'
+import { audienceVars, type AudienceLeadFields } from './audience/vars'
 
-export interface TemplateLead {
+export interface TemplateLead extends AudienceLeadFields {
   firstName?: string | null
   lastName?: string | null
   fullName?: string | null
@@ -37,6 +38,14 @@ export const TEMPLATE_VARS = [
   { key: 'senderName',      label: 'Your name' },
   { key: 'senderFirstName', label: 'Your first name' },
   { key: 'demoPhone',       label: 'Demo phone number' },
+  { key: 'commentHook',     label: 'YouTube: where they commented + topic' },
+  { key: 'commentTopic',    label: 'YouTube: what their comment was about' },
+  { key: 'sourceVideo',     label: 'YouTube: video title' },
+  { key: 'sourceChannel',   label: 'YouTube: channel name' },
+  { key: 'useCase',         label: 'AI Builder use case for their interest' },
+  { key: 'useCaseShort',    label: 'Use case, short ("an AI sales agent")' },
+  { key: 'builderUrl',      label: 'Link to try Triven AI Builder' },
+  { key: 'senderAddress',   label: 'Your postal address (footer)' },
 ] as const
 
 // Used when a variable has no value and the template gives no {{key|fallback}}
@@ -67,7 +76,9 @@ export function nameFromEmail(email?: string | null): { firstName?: string; doct
   return {}
 }
 
-export function buildTemplateVars(lead: TemplateLead, sender?: TemplateSender | null, extras: { demoPhone?: string } = {}): Record<string, string> {
+export interface TemplateExtras { demoPhone?: string; builderUrl?: string; senderAddress?: string }
+
+export function buildTemplateVars(lead: TemplateLead, sender?: TemplateSender | null, extras: TemplateExtras = {}): Record<string, string> {
   const nameParts = (lead.fullName || '').trim().split(/\s+/).filter(Boolean)
   const senderName = sender?.displayName || ''
   const fromEmail = !lead.firstName && !lead.fullName ? nameFromEmail(lead.companyEmail) : {}
@@ -90,7 +101,16 @@ export function buildTemplateVars(lead: TemplateLead, sender?: TemplateSender | 
     senderFirstName: senderName.split(/\s+/)[0] || '',
     senderEmail:     sender?.email || '',
     demoPhone:       extras.demoPhone?.trim() || '',
+    builderUrl:      extras.builderUrl?.trim() || '',
+    senderAddress:   extras.senderAddress?.trim() || '',
+    // People found through YouTube: talk about their comment, greet them as a person
+    ...(lead.sourceVideo || lead.sourceChannel ? audienceOverrides(lead, firstName) : audienceVars({}, firstName)),
   }
+}
+
+function audienceOverrides(lead: TemplateLead, firstName: string) {
+  const v = audienceVars(lead, firstName)
+  return { ...v, name: firstName || 'there', hook: v.commentHook, forwardLine: '' }
 }
 
 /**

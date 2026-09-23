@@ -146,8 +146,8 @@ export async function sendFollowUpTask(
     const inReplyTo = firstMessage?.gmailMessageId
       ? await getMessageIdHeader(senderAccountId, firstMessage.gmailMessageId)
       : undefined
-    const { demoPhone } = await getSettings()
-    const body = renderTemplate(rawBody, buildTemplateVars(lead, sender, { demoPhone }))
+    const { demoPhone, builderUrl, senderAddress } = await getSettings()
+    const body = renderTemplate(rawBody, buildTemplateVars(lead, sender, { demoPhone, builderUrl, senderAddress }))
 
     const gmailMessage = await sendGmail({
       senderAccountId,

@@ -1,5 +1,6 @@
 'use client'
 import { useState, useEffect, useRef, useMemo } from 'react'
+import type { AudienceLeadFields } from '@/lib/audience/vars'
 import Link from 'next/link'
 import useSWR from 'swr'
 import { toast } from 'sonner'
@@ -22,7 +23,7 @@ import { DEFAULT_SEND_WINDOW, describeWindow, fmtInZone, windowInZone, type Send
 const fetcher = (url: string) => fetch(url).then(r => r.json())
 
 // ─── Types ────────────────────────────────────────────────────────────────────
-export interface ComposeLead {
+export interface ComposeLead extends AudienceLeadFields {
   id: string
   firstName?: string | null
   lastName?: string | null
@@ -100,7 +101,7 @@ export default function ComposeEmailDialog({
   const { data: sendersData }   = useSWR<Sender[]>('/api/sender-accounts', fetcher)
   const { data: templatesData } = useSWR<Template[]>('/api/templates', fetcher)
   const { data: campaignsData } = useSWR<Campaign[]>('/api/campaigns', fetcher)
-  const { data: settingsData }  = useSWR<{ sendWindow: SendWindow; followUpDays: number[]; demoPhone?: string }>('/api/settings', fetcher)
+  const { data: settingsData }  = useSWR<{ sendWindow: SendWindow; followUpDays: number[]; demoPhone?: string; builderUrl?: string; senderAddress?: string }>('/api/settings', fetcher)
   const { data: allowance }     = useSWR<Record<string, { left: number; limit: number; warmingUp: boolean }>>('/api/sender-accounts/allowance', fetcher)
   const sendWindow = settingsData?.sendWindow ?? DEFAULT_SEND_WINDOW
   const defaultDelays = settingsData?.followUpDays ?? DEFAULT_DELAYS
@@ -147,7 +148,7 @@ export default function ComposeEmailDialog({
   const recipient = isNewLead
     ? { firstName: toFirstName, companyName: toCompany || guessCompanyFromEmail(toEmail), companyEmail: toEmail }
     : lead
-  const vars = buildTemplateVars(recipient, sender, { demoPhone: settingsData?.demoPhone })
+  const vars = buildTemplateVars(recipient, sender, { demoPhone: settingsData?.demoPhone, builderUrl: settingsData?.builderUrl, senderAddress: settingsData?.senderAddress })
 
   function applyTemplate(t: Template, announce = true) {
     setTemplateId(t.id)

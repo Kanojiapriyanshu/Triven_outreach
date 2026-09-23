@@ -17,6 +17,7 @@ import {
 } from '@/components/ui/dialog'
 import { TEMPLATE_VARS, renderTemplate, buildTemplateVars } from '@/lib/template'
 import { SEQUENCE_LIBRARY } from '@/lib/sequence-library'
+import { SAMPLE_AUDIENCE_LEAD } from '@/lib/audience/sequences'
 
 const fetcher = (url: string) => fetch(url).then((r) => r.json())
 
@@ -42,7 +43,7 @@ const SAMPLE_LEAD = { firstName: 'Sarah', companyName: 'Bright Smile Dental', ci
 export default function TemplatesPage() {
   const { data, mutate } = useSWR<Template[]>('/api/templates', fetcher)
   const { data: campaignsData, mutate: mutateCampaigns } = useSWR<Campaign[]>('/api/campaigns', fetcher)
-  const { data: settingsData } = useSWR<{ demoPhone?: string }>('/api/settings', fetcher)
+  const { data: settingsData } = useSWR<{ demoPhone?: string; builderUrl?: string; senderAddress?: string }>('/api/settings', fetcher)
   const templates = Array.isArray(data) ? data : []
   const campaigns = Array.isArray(campaignsData) ? campaignsData : []
 
@@ -150,7 +151,11 @@ export default function TemplatesPage() {
     setNiche(d.id)
   }
 
-  const sampleVars = buildTemplateVars(SAMPLE_LEAD, { displayName: 'Priyanshu' }, { demoPhone: settingsData?.demoPhone || '(555) 010-2030' })
+  const extras = { demoPhone: settingsData?.demoPhone || '(555) 010-2030', builderUrl: settingsData?.builderUrl, senderAddress: settingsData?.senderAddress }
+  const localVars = buildTemplateVars(SAMPLE_LEAD, { displayName: 'Priyanshu' }, extras)
+  // AI Builder templates talk about a YouTube comment: preview them with a YouTube prospect
+  const audienceSample = buildTemplateVars(SAMPLE_AUDIENCE_LEAD, { displayName: 'Priyanshu' }, extras)
+  const varsFor = (body: string) => (/commentHook|commentTopic|useCase|sourceVideo/.test(body) || nicheName.startsWith('AI Builder') ? audienceSample : localVars)
   const hasSequence = STEPS.slice(0, 4).every((s) => inNiche.some((t) => t.type === s.type))
 
   return (
@@ -312,8 +317,8 @@ export default function TemplatesPage() {
               </div>
               {preview ? (
                 <div className="mt-1 rounded-lg border border-indigo-200 bg-indigo-50 px-4 py-3 text-sm whitespace-pre-wrap text-slate-800 leading-relaxed min-h-[240px]">
-                  {!isFollowUp && <p className="font-semibold mb-3">{renderTemplate(form.subject, sampleVars)}</p>}
-                  {renderTemplate(form.body, sampleVars)}
+                  {!isFollowUp && <p className="font-semibold mb-3">{renderTemplate(form.subject, varsFor(form.body))}</p>}
+                  {renderTemplate(form.body, varsFor(form.body))}
                 </div>
               ) : (
                 <Textarea value={form.body} onChange={(e) => setForm((f) => ({ ...f, body: e.target.value }))} placeholder={'Hi {{firstName}},\n\n…'} className="mt-1 font-normal" rows={12} />
@@ -381,8 +386,8 @@ export default function TemplatesPage() {
                       {seq.steps.map((s) => (
                         <div key={s.type} className="rounded-lg bg-slate-50 border border-slate-100 p-3">
                           <p className="text-xs font-semibold text-slate-500 uppercase mb-1">{STEP_LABEL[s.type]}</p>
-                          {s.subject && <p className="text-sm font-medium text-slate-800 mb-1">{renderTemplate(s.subject, sampleVars)}</p>}
-                          <p className="text-xs text-slate-600 whitespace-pre-wrap leading-relaxed">{renderTemplate(s.body, sampleVars)}</p>
+                          {s.subject && <p className="text-sm font-medium text-slate-800 mb-1">{renderTemplate(s.subject, varsFor(s.body))}</p>}
+                          <p className="text-xs text-slate-600 whitespace-pre-wrap leading-relaxed">{renderTemplate(s.body, varsFor(s.body))}</p>
                         </div>
                       ))}
                     </div>

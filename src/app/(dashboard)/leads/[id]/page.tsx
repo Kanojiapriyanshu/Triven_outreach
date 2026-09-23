@@ -19,6 +19,7 @@ import {
 } from '@/components/ui/select'
 import { fmtDate, fmtDateTime, fmtCurrency, getDisplayName, STATUS_LABELS } from '@/lib/utils'
 import type { LeadRow } from '@/types'
+import { personaLabel, interestLabel } from '@/lib/audience/taxonomy'
 import { DEFAULT_SEND_WINDOW, fmtInZone, type SendWindow } from '@/lib/send-window'
 
 const fetcher = (url: string) => fetch(url).then((r) => r.json())
@@ -296,6 +297,25 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
 
         {/* Right column */}
         <div className="lg:col-span-2 space-y-4">
+          {/* Why we contacted them (YouTube audience) */}
+          {(lead.sourceVideo || lead.sourceComment) && (
+            <Card>
+              <CardHeader><CardTitle>Found on YouTube</CardTitle></CardHeader>
+              <CardContent className="space-y-2 text-sm">
+                <p className="text-slate-600">
+                  Commented on {lead.sourceChannel ? <strong>{lead.sourceChannel}</strong> : 'a video'}{lead.sourceVideo ? <>&apos;s video &ldquo;{lead.sourceVideo}&rdquo;</> : ''}
+                  {lead.commentTopic && <> about <strong>{lead.commentTopic}</strong></>}.
+                  {lead.sourceVideoUrl && <> <a href={lead.sourceVideoUrl} target="_blank" rel="noreferrer" className="text-indigo-600 hover:underline">Open comment ↗</a></>}
+                </p>
+                {lead.sourceComment && <blockquote className="border-l-2 border-slate-200 pl-3 text-slate-700 whitespace-pre-wrap">{lead.sourceComment}</blockquote>}
+                <p className="text-xs text-slate-500">
+                  {[lead.persona && personaLabel(lead.persona), lead.interestCategory && interestLabel(lead.interestCategory)].filter(Boolean).join(' · ')}
+                  {lead.prospectId && <> · <Link href={`/audience/prospects?q=${encodeURIComponent(lead.companyEmail || '')}`} className="text-indigo-600 hover:underline">Prospect record</Link></>}
+                </p>
+              </CardContent>
+            </Card>
+          )}
+
           {/* Research */}
           {(lead.personalizationNotes || lead.companyPainPoint || lead.whyThisLead) && (
             <Card>
@@ -516,6 +536,11 @@ export default function LeadDetailPage({ params }: { params: Promise<{ id: strin
             whyThisLead:     lead.whyThisLead,
             notes:           lead.notes,
             personalizationNotes: lead.personalizationNotes,
+            sourceChannel:   lead.sourceChannel,
+            sourceVideo:     lead.sourceVideo,
+            commentTopic:    lead.commentTopic,
+            interestCategory: lead.interestCategory,
+            persona:         lead.persona,
           }}
           taskId={composeTask?.id}
           taskType={composeTask?.type}

@@ -12,6 +12,10 @@ export interface OutreachSettings {
   maxGapMinutes: number
   /** Demo line prospects can call to test the AI receptionist, used as {{demoPhone}} */
   demoPhone: string
+  /** Where prospects can try Triven AI Builder, used as {{builderUrl}} (empty = "reply for access") */
+  builderUrl: string
+  /** Postal address for the email footer, used as {{senderAddress}} (CAN-SPAM, CASL, Spam Act) */
+  senderAddress: string
 }
 
 export const DEFAULT_SETTINGS: OutreachSettings = {
@@ -21,6 +25,8 @@ export const DEFAULT_SETTINGS: OutreachSettings = {
   minGapMinutes: 8,
   maxGapMinutes: 15,
   demoPhone: '',
+  builderUrl: '',
+  senderAddress: '',
 }
 
 const KEY = 'outreach'
