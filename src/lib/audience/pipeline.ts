@@ -29,6 +29,7 @@ import { autoQueue, fastLane, scanTracked } from './refill'
 import { recomputeIntelligence, getCapabilities } from './intelligence'
 import { loadExclusions, isExcluded, detectCoordination } from './quality'
 import { autoPushReady } from './routing'
+import { budgetLeft, spend } from '../budget'
 
 const left = (deadline: number) => deadline - Date.now()
 
@@ -345,10 +346,12 @@ export async function aiReview(deadline: number, settings: AudienceSettings) {
   if (!aiConfigured() || !settings.useAi) return out
   const caps = await getCapabilities()
   while (left(deadline) > 25_000) {
+    const allowance = await budgetLeft('ai')
+    if (!allowance) { out.error = 'Daily AI budget reached (Settings → Daily spend limits)'; break }
     const batch = await prisma.prospect.findMany({
-      where: { aiCheckedAt: null, relevance: { not: 'SPAM' }, score: { gte: 25 }, inauthentic: false, status: { not: 'DO_NOT_CONTACT' } },
-      orderBy: { score: 'desc' },
-      take: 15,
+      where: { aiCheckedAt: null, relevance: { not: 'SPAM' }, intentScore: { gte: 50 }, inauthentic: false, status: { not: 'DO_NOT_CONTACT' } },
+      orderBy: { intentScore: 'desc' },
+      take: Math.min(15, allowance),
       select: {
         id: true, displayName: true, channelDescription: true, ownChannelSummary: true,
         comments: { where: { flaggedInauthentic: false }, orderBy: { score: 'desc' }, take: 4, select: { text: true, video: { select: { title: true, channel: { select: { title: true } } } } } },
@@ -400,6 +403,7 @@ export async function aiReview(deadline: number, settings: AudienceSettings) {
         },
       })
     }))
+    await spend('ai', batch.length)
     // Fit and opportunity depend on the new use case
     await recomputeIntelligence(batch.filter((p) => byId.has(p.id)).map((p) => p.id), { settings, caps })
     out.reviewed += batch.length
@@ -586,8 +590,10 @@ export async function identityStep(deadline: number, settings: AudienceSettings,
   })
   for (const p of batch) {
     if (left(deadline) < 15_000) break
+    if ((await budgetLeft('search')) < 2) { out.errors.push('Daily web-search budget reached'); break }
     try {
       const id = await resolveIdentity(p)
+      await spend('search', id.searches)
       out.searched++
       const found: Findings = { emails: [], otherLinks: [], notes: [...id.notes] }
       // A confirmed site gets the same polite crawl as a site they linked themselves

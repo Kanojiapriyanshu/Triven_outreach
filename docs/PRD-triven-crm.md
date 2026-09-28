@@ -9,6 +9,27 @@
 | Scope | The whole CRM: sources → intelligence → contact discovery → outreach → replies → revenue |
 | Owner | Growth, Triven |
 
+## Implementation status (2026-09-28, branch `feature/crm-v2`)
+
+| Area | Status | Notes |
+|---|---|---|
+| M0 Reliability | ✅ Built | Heartbeat, System Health, capacity + idle reasons, address guard. **You**: create the 3 cron-job.org jobs (System Health shows how), then deploy |
+| M1 Sources | ✅ Built | Connector registry, auto-queue, daily channel scans, fast lane, community export import |
+| M2 Data quality | ✅ Built | Early-swarm / duplicate-text / reply-ring detection, exclusion list, per-channel flagged share |
+| M3 Intelligence | ✅ Built | Evidence ledger, use case, fit, reach, freshness, opportunity, cited Why Triven (AI needs `ANTHROPIC_API_KEY`) · ◐ R3.8: Lead Finder keeps its own fit score (shared queues/analytics not unified) |
+| M4 Contact discovery | ✅ Built | Discovery stages + funnel, email confidence with reasons, daily spend caps, warm-touch list |
+| M5 Segments | ✅ Built | Builder, live counts + exclusion breakdown, daily campaign feed |
+| M6 Campaigns | ✅ Built | 8 use-case campaigns + sequences, use-case routing, launch review, auto-add, A/B · ◐ R6.2: hook doesn't yet say *when* they commented |
+| M7 Sending | ✅ Built | Recipient business hours, bounce auto-pause (inbox + campaign) |
+| M8 Replies | ✅ Built | Rule + AI triage, suggested replies, unsubscribe suppression |
+| M9 Revenue | ✅ Built | First-touch attribution, calendar webhook, pipeline board, source snapshots |
+| M10 Analytics | ✅ Built | Sources page, yield score, quality-based auto-pause, recommendations, what-converts + suggestions · ◐ R10.3: budgets follow yield by *ordering*, not a fixed 60/30/10 split |
+| M11 Notifications | ✅ Built | New alerts, daily digest, weekly insights |
+| M12 Users & settings | ✅ Built | Roles enforced on every write, Team page, capability sheet, spend caps · ◌ R12.2 change history not built |
+| M13 Compliance | ◐ Partial | Built: all guards above. Open: YouTube 30-day refresh for *relevant* people's raw comments (needs counsel's view, §C4) |
+
+Needs from you before launch: postal address, the capability sheet reviewed, a verifier + Anthropic key, the scheduler, then a deploy (merge `feature/crm-v2`).
+
 **Part A** audits what works today, with numbers from the production database and the worker logs.
 **Part B** is the product specification. **Part C** is the build plan.
 

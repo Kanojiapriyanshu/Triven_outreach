@@ -2,6 +2,7 @@
 // check needs a verification provider because outbound port 25 (SMTP probing) is blocked on
 // Vercel and most home networks. Set ONE of the provider keys below to get VERIFIED results.
 import { domainAcceptsMail } from '../outreach'
+import { budgetLeft, spend } from '../budget'
 import type { EmailStatus } from './taxonomy'
 
 export const FREE_MAIL = new Set(['gmail.com', 'googlemail.com', 'yahoo.com', 'yahoo.co.uk', 'yahoo.co.in', 'ymail.com', 'outlook.com',
@@ -126,7 +127,9 @@ export async function verifyEmail(email: string): Promise<Verdict> {
 
   const provider = verifierProvider()
   if (!provider) return { status: 'UNKNOWN', method: 'MX', detail: 'domain accepts mail; mailbox not checked (no verifier key)' }
+  if (!(await budgetLeft('verifier'))) return { status: 'UNKNOWN', method: 'MX', detail: 'verifier error: daily verifier budget reached, checked again tomorrow' }
   try {
+    await spend('verifier')
     return await providerCheck(provider, email)
   } catch (err) {
     return { status: 'UNKNOWN', method: provider, detail: `verifier error: ${(err as Error).message}`.slice(0, 180) }

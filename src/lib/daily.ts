@@ -5,6 +5,7 @@ import { qualityPass } from './audience/pipeline'
 import { snapshotSources } from './audience/sources'
 import { runSegmentFeeds } from './audience/segments'
 import { weeklyInsightsNotice } from './insights'
+import { dailyDigest } from './digest'
 
 const KEY = 'daily_last_run'
 
@@ -26,5 +27,6 @@ export async function runDailyJobs(deadline: number) {
   await step('sources', snapshotSources)
   await step('segments', runSegmentFeeds)
   await step('insights', weeklyInsightsNotice)
+  await step('digest', dailyDigest)
   return out
 }

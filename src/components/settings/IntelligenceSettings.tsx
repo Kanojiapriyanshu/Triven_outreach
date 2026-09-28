@@ -2,7 +2,8 @@
 import { useEffect, useState } from 'react'
 import useSWR from 'swr'
 import { toast } from 'sonner'
-import { Sparkles, ShieldOff, Trash2 } from 'lucide-react'
+import { Sparkles, ShieldOff, Trash2, Wallet } from 'lucide-react'
+import { SERVICE_LABEL, type Service } from '@/lib/budget-labels'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -117,6 +118,38 @@ export function ExclusionsCard() {
             ))}
           </div>
         )}
+      </CardContent>
+    </Card>
+  )
+}
+
+/** Settings → Daily spend limits (PRD R4.3): each paid step stops for the day at its cap */
+export function SpendCapsCard() {
+  const { data, mutate } = useSWR<{ caps: Record<Service, number>; used: Record<Service, number> }>('/api/settings/spend', fetcher)
+  const [caps, setCaps] = useState<Record<Service, number> | null>(null)
+  useEffect(() => { if (data && !caps) setCaps(data.caps) }, [data, caps])
+  if (!caps || !data) return null
+  async function save() {
+    const res = await fetch('/api/settings/spend', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(caps) })
+    if (!res.ok) return toast.error((await res.json()).error || 'Could not save')
+    toast.success('Limits saved'); mutate()
+  }
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2"><Wallet className="h-4 w-4 text-slate-500" />Daily spend limits</CardTitle>
+        <CardDescription>The most each paid service may be used per day. When a limit is reached that step pauses until tomorrow; nothing else stops. Hunter also keeps the credit reserve set in Audience rules.</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <div className="grid gap-3 sm:grid-cols-2">
+          {(Object.keys(SERVICE_LABEL) as Service[]).map((k) => (
+            <label key={k} className="text-xs text-slate-500">
+              {SERVICE_LABEL[k].label} ({SERVICE_LABEL[k].unit} / day) · used today: <strong className="text-slate-700">{data.used[k] || 0}</strong>
+              <Input type="number" min={0} value={caps[k]} onChange={(e) => setCaps({ ...caps, [k]: Math.max(0, Number(e.target.value) || 0) })} className="mt-1 h-8" />
+            </label>
+          ))}
+        </div>
+        <Button size="sm" onClick={save}>Save limits</Button>
       </CardContent>
     </Card>
   )

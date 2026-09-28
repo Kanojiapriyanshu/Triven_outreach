@@ -17,6 +17,7 @@ import { hunterAccount, hunterConfigured, hunterEmailCount } from '../audience/h
 import { getAudienceSettings } from '../audience/settings'
 import type { Niche } from './niches'
 import type { FinderSettings } from './settings'
+import { budgetLeft, spend } from '../budget'
 
 export type BizEmailSource = 'LISTING' | 'WEBSITE' | 'SEARCH' | 'HUNTER' | 'PATTERN' | 'ROLE_GUESS' | 'MANUAL'
 
@@ -201,8 +202,10 @@ async function searchEmails(name: string, city: string | undefined, domain: stri
   const queries = [`"${name}"${city ? ` ${city}` : ''} email`, ...(searchProvider() === 'BRAVE' ? [`"@${domain}"`] : [])]
   let calls = 0
   for (const q of queries) {
+    if (!(await budgetLeft('search'))) { r.log.push('Web search skipped: daily budget reached'); break }
     try {
       const results = await webSearch(q, country)
+      await spend('search')
       calls++
       for (const res of results) {
         const text = `${res.title} ${res.snippet}`
@@ -230,7 +233,9 @@ async function searchEmails(name: string, city: string | undefined, domain: stri
 async function ownerFromSearch(name: string, city: string | undefined, country: string | undefined, r: Research) {
   const core = name.replace(/\b(llc|inc|pllc|dds|dmd|pc|ltd|co|the|of|and|&)\b\.?/gi, '').replace(/[^\w\s'’-]/g, ' ').replace(/\s+/g, ' ').trim()
   if (core.length < 4) return
+  if (!(await budgetLeft('search'))) { r.log.push('Owner search skipped: daily web-search budget reached'); return }
   try {
+    await spend('search')
     const results = await webSearch(`site:linkedin.com/in "${core}" (owner OR founder OR president OR dentist OR partner)${city ? ` ${city}` : ''}`, country)
     const key = core.toLowerCase().split(' ').filter((w) => w.length > 3)
     for (const res of results) {

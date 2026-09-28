@@ -4,6 +4,7 @@ import { hostOf, SHARED_HOSTS } from './enrich'
 import { FREE_MAIL, normalizeEmail, isUsableEmail } from './verify'
 import { hunterConfigured, hunterEmailCount, hunterFindEmail, hunterDomainOwner, HunterLimitError } from './hunter'
 import type { EmailStatus } from './taxonomy'
+import { budgetLeft, spend } from '../budget'
 
 export interface FoundEmail {
   email: string
@@ -94,7 +95,9 @@ export async function findBusinessEmail(p: { firstName?: string | null; lastName
   ]
   for (const step of steps.filter((s) => s.enabled)) {
     if (outOfCredits && step.name.startsWith('Hunter')) continue
+    if (!(await budgetLeft('finder'))) { notes.push('Daily email-finder budget reached'); break }
     try {
+      await spend('finder')
       const found = await step.run()
       if (found) return { found, notes: [...notes, `${step.name}: ${found.email}`], outOfCredits }
       notes.push(`${step.name}: no match`)

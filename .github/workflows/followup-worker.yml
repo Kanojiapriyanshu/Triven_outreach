@@ -2,8 +2,10 @@ name: Outreach Worker
 
 on:
   schedule:
-    # Every 5 minutes (GitHub's minimum): check Gmail for replies/bounces, then every free
-    # inbox sends one email. The per-inbox gap (Settings) decides the real pacing.
+    # BACKUP ONLY. GitHub runs "every 5 minutes" schedules only a few times a day, which is far
+    # too slow for sending. The primary trigger is an external scheduler (cron-job.org or QStash)
+    # calling /api/worker?action=tick|audience|finder every 5 minutes: see System Health in the app.
+    # Every run: check Gmail for replies/bounces, then every free inbox sends one email.
     # Follow-ups only go out inside the send window set in Settings (default 9 PM–12 AM IST).
     - cron: '*/5 * * * *'
   workflow_dispatch: # manual "Run workflow" button
@@ -33,6 +35,7 @@ jobs:
             -X POST "${APP_URL%/}/api/worker" \
             -H "Content-Type: application/json" \
             -H "x-worker-secret: $WORKER_SECRET" \
+            -H "x-worker-source: github-actions" \
             -d '{"action":"tick"}')
 
           HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
@@ -56,6 +59,7 @@ jobs:
             -X POST "${APP_URL%/}/api/worker" \
             -H "Content-Type: application/json" \
             -H "x-worker-secret: $WORKER_SECRET" \
+            -H "x-worker-source: github-actions" \
             -d '{"action":"audience"}')
 
           HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
@@ -75,6 +79,7 @@ jobs:
             -X POST "${APP_URL%/}/api/worker" \
             -H "Content-Type: application/json" \
             -H "x-worker-secret: $WORKER_SECRET" \
+            -H "x-worker-source: github-actions" \
             -d '{"action":"finder"}')
 
           HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
