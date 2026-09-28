@@ -1,6 +1,6 @@
 // Links to a source item on its platform. Browser-safe.
 
-export const PLATFORM_LABEL: Record<string, string> = { YOUTUBE: 'YouTube', HN: 'Hacker News', DEVTO: 'DEV' }
+export const PLATFORM_LABEL: Record<string, string> = { YOUTUBE: 'YouTube', HN: 'Hacker News', DEVTO: 'DEV', COMMUNITY: 'Community' }
 
 /** External ids are stored as-is for YouTube and prefixed "hn:" / "devto:" for the others */
 const bare = (id: string) => id.replace(/^(hn|devto):/, '')

@@ -53,10 +53,10 @@ async function handle(req: NextRequest) {
           return { replies, results, health }
         }
         case 'audience': {
+          // Once a day this call runs the daily jobs instead (snapshots, quality pass, segment feeds)
+          if (await dailyJobsDue()) return { daily: await runDailyJobs(started + 55_000) }
           if (!(await getAudienceSettings()).autoRun) return { skipped: 'auto-run is off' }
-          const pipeline = await runAudiencePipeline(started + 42_000)
-          const daily = (await dailyJobsDue()) ? await runDailyJobs(started + 55_000) : undefined
-          return { pipeline, daily }
+          return { pipeline: await runAudiencePipeline(started + 50_000) }
         }
         case 'finder': {
           if (!(await getFinderSettings()).autoResearch) return { skipped: 'auto-research is off' }

@@ -22,6 +22,7 @@ import {
   Layers,
   BarChart3,
   Kanban,
+  UserCog,
   type LucideIcon,
 } from 'lucide-react'
 import useSWR from 'swr'
@@ -64,6 +65,7 @@ const sections: Array<{ title: string; items: NavItem[] }> = [
     title: 'Configuration',
     items: [
       { label: 'Sender accounts', href: '/sender-accounts', icon: Mail },
+      { label: 'Team', href: '/users', icon: UserCog },
       { label: 'System health', href: '/system', icon: Activity },
       { label: 'Settings', href: '/settings', icon: Settings },
     ],

@@ -52,6 +52,10 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   if (newStatus === 'REPLIED') patch.hasReplied = true
   if (newStatus === 'INTERESTED') { patch.hasReplied = true; patch.isInterested = true }
   if (newStatus === 'WON') { patch.hasSale = true; if (!body.saleDate) patch.saleDate = new Date() }
+  if (newStatus === 'MEETING_BOOKED') { patch.meetingBooked = true; patch.hasReplied = true; patch.isInterested = true; if (!body.meetingDate && !existing.meetingDate) patch.meetingDate = new Date() }
+  if (newStatus === 'PROPOSAL_SENT') { patch.proposalSent = true; patch.isInterested = true }
+  if (typeof body.dealValue === 'string') patch.dealValue = body.dealValue.trim() === '' ? null : Number(body.dealValue.replace(/[^\d.]/g, ''))
+  if (typeof body.meetingDate === 'string') patch.meetingDate = body.meetingDate ? new Date(body.meetingDate) : null
 
   const lead = await prisma.lead.update({
     where: { id },

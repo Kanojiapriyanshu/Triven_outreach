@@ -4,8 +4,9 @@ import Link from 'next/link'
 import useSWR from 'swr'
 import { toast } from 'sonner'
 import {
-  Telescope, Search, Link2, ListVideo, RefreshCw, Trash2, Eye, EyeOff, Play, SkipForward, Users, MessageSquare, ExternalLink, Code2,
+  Telescope, Search, Link2, ListVideo, RefreshCw, Trash2, Eye, EyeOff, Play, SkipForward, Users, MessageSquare, ExternalLink, Code2, Upload,
 } from 'lucide-react'
+import CommunityImport from '@/components/audience/CommunityImport'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -44,6 +45,7 @@ const TABS = [
   { key: 'channels', label: 'Channels', icon: Users },
   { key: 'hn', label: 'Hacker News', icon: MessageSquare },
   { key: 'devto', label: 'DEV', icon: Code2 },
+  { key: 'community', label: 'Community import', icon: Upload },
   { key: 'queue', label: 'Collection', icon: ListVideo },
 ] as const
 
@@ -98,6 +100,7 @@ export default function DiscoverPage() {
       {tab === 'channels' && <ChannelsTab />}
       {tab === 'hn' && <HnTab onQueued={() => { mutateOverview(); setTab('queue') }} />}
       {tab === 'devto' && <DevTab onQueued={() => { mutateOverview(); setTab('queue') }} />}
+      {tab === 'community' && <CommunityImport onDone={() => mutateOverview()} />}
       {tab === 'queue' && <QueueTab />}
     </div>
   )

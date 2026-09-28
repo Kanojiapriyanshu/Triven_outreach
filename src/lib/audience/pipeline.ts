@@ -194,10 +194,12 @@ interface IngestComment {
   text: string; likeCount: number; replyCount: number; parentId: string | null; publishedAt: Date | null
   /** Platform username when the display name differs from it (DEV) */
   handle?: string
+  /** Where their profile lives, when the source gives it (community exports) */
+  profileUrl?: string | null
 }
 
 /** Store new comments (each exactly once), create one prospect per author, re-score them */
-async function ingestComments(video: IngestVideo, comments: IngestComment[]) {
+export async function ingestComments(video: IngestVideo, comments: IngestComment[]) {
   if (!comments.length) return { inserted: 0, newProspects: 0 }
   const known = await prisma.audienceComment.findMany({ where: { youtubeCommentId: { in: comments.map((c) => c.externalId) } }, select: { youtubeCommentId: true } })
   const seen = new Set(known.map((k) => k.youtubeCommentId))
@@ -216,7 +218,7 @@ async function ingestComments(video: IngestVideo, comments: IngestComment[]) {
     return {
       youtubeChannelId: id,
       platform: video.platform,
-      profileUrl: video.platform === 'HN' ? hnUserUrl(c.authorName) : video.platform === 'DEVTO' ? devUserUrl(c.handle || c.authorName) : null,
+      profileUrl: c.profileUrl || (video.platform === 'HN' ? hnUserUrl(c.authorName) : video.platform === 'DEVTO' ? devUserUrl(c.handle || c.authorName) : null),
       displayName: c.authorName.replace(/^@/, ''),
       handle: video.platform === 'YOUTUBE' ? (c.authorName.startsWith('@') ? c.authorName : null) : c.handle || c.authorName,
       avatarUrl: c.avatarUrl,

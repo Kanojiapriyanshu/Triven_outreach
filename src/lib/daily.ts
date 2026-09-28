@@ -2,6 +2,9 @@
 import prisma from './prisma'
 import { pruneRuns } from './worker-log'
 import { qualityPass } from './audience/pipeline'
+import { snapshotSources } from './audience/sources'
+import { runSegmentFeeds } from './audience/segments'
+import { weeklyInsightsNotice } from './insights'
 
 const KEY = 'daily_last_run'
 
@@ -20,5 +23,8 @@ export async function runDailyJobs(deadline: number) {
   }
   await step('pruneRuns', pruneRuns)
   await step('quality', qualityPass)
+  await step('sources', snapshotSources)
+  await step('segments', runSegmentFeeds)
+  await step('insights', weeklyInsightsNotice)
   return out
 }

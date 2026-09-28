@@ -1,4 +1,5 @@
 'use client'
+import InsightsPanel from '@/components/analytics/InsightsPanel'
 import { useState } from 'react'
 import useSWR from 'swr'
 import {
@@ -168,6 +169,8 @@ export default function AnalyticsPage() {
           </CardContent>
         </Card>
       )}
+
+      <InsightsPanel />
     </div>
   )
 }

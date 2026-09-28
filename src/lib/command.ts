@@ -5,6 +5,7 @@ import { getSettings } from './settings'
 import { googleConfigured } from './finder/places'
 import { verifierProvider } from './audience/verify'
 import { searchProvider } from './audience/identity'
+import { minutesSinceLast } from './worker-log'
 
 export interface NextMove {
   id: string
@@ -36,7 +37,15 @@ export async function nextMoves(): Promise<NextMove[]> {
     getSettings(),
   ])
 
+  const [tickAge, useCaseCampaigns, capsSaved, warmTouch] = await Promise.all([
+    minutesSinceLast('tick'),
+    prisma.campaign.count({ where: { useCase: { not: null } } }),
+    prisma.setting.findUnique({ where: { key: 'triven_capabilities' }, select: { key: true } }),
+    prisma.prospect.count({ where: { warmTouch: 'TODO' } }),
+  ])
+
   const moves: NextMove[] = []
+  if (tickAge === null || tickAge > 20) moves.push({ id: 'worker', severity: 'urgent', title: tickAge === null ? 'The background worker has never run' : `The background worker hasn't run for ${tickAge} min`, detail: 'Nothing sends, and no replies are detected, until it runs every 5 minutes. Set up the free scheduler.', href: '/system', cta: 'Fix' })
   if (unreadReplies) moves.push({ id: 'replies', severity: 'urgent', title: `Reply to ${unreadReplies} ${unreadReplies === 1 ? 'person' : 'people'}`, detail: 'Replies answered within an hour convert several times better than next-day ones.', href: '/inbox', cta: 'Open inbox', count: unreadReplies })
   if (interested) moves.push({ id: 'interested', severity: 'urgent', title: `Book ${interested} interested lead${interested === 1 ? '' : 's'}`, detail: 'They said yes but no meeting is booked yet.', href: '/leads?status=INTERESTED', cta: 'See leads', count: interested })
   for (const b of brokenInboxes) moves.push({ id: `inbox:${b.email}`, severity: 'urgent', title: `Reconnect ${b.email}`, detail: 'Sending and reply tracking are paused for this inbox.', href: '/sender-accounts', cta: 'Reconnect' })
@@ -52,8 +61,11 @@ export async function nextMoves(): Promise<NextMove[]> {
 
   if (businessesReady) moves.push({ id: 'biz-ready', severity: 'normal', title: `${businessesReady} businesses ready to email`, detail: 'Found, researched and with an email that passes your rules.', href: '/finder?status=READY', cta: 'Add to campaign', count: businessesReady })
   if (prospectsReady) moves.push({ id: 'aud-ready', severity: 'normal', title: `${prospectsReady} audience prospects ready`, detail: 'Builders from YouTube, Hacker News and DEV with a confirmed business email.', href: '/audience/prospects?status=READY_TO_CONTACT', cta: 'Review', count: prospectsReady })
+  if (warmTouch) moves.push({ id: 'warm', severity: 'normal', title: `${warmTouch} high-fit people to reach by hand`, detail: 'Strong fit, no email anywhere. A short LinkedIn note works best.', href: '/audience/prospects?warmTouch=true', cta: 'Open list', count: warmTouch })
   if (callList) moves.push({ id: 'call', severity: 'normal', title: `${callList} good-fit businesses to call`, detail: 'No email anywhere, but a strong fit and a phone number. Export the call list.', href: '/finder?status=CALL', cta: 'Call list', count: callList })
 
+  if (!useCaseCampaigns) moves.push({ id: 'setup-usecase', severity: 'setup', title: 'Create the use-case campaigns', detail: 'Eight AI Builder campaigns, one per thing people want to build (AI receptionist, voice agent, sales agent…). Ready people are routed to the right one.', href: '/campaigns', cta: 'Campaigns' })
+  if (!capsSaved) moves.push({ id: 'setup-caps', severity: 'setup', title: 'Review what Triven can do', detail: 'The capability sheet limits what emails and "Why Triven" lines may claim. Check it matches the product today.', href: '/settings', cta: 'Settings' })
   if (!senders) moves.push({ id: 'setup-sender', severity: 'setup', title: 'Connect a Gmail inbox', detail: 'Nothing can be sent until at least one inbox is connected.', href: '/sender-accounts', cta: 'Connect' })
   if (!settings.senderAddress) moves.push({ id: 'setup-address', severity: 'setup', title: 'Add your postal address', detail: 'Required in cold-email footers (CAN-SPAM, CASL, Spam Act).', href: '/settings', cta: 'Settings' })
   if (!googleConfigured()) moves.push({ id: 'setup-google', severity: 'setup', title: 'Add a Google Places key', detail: 'Unlocks Google Maps search with ratings and hours (about 20,000 businesses a month free). OpenStreetMap works without it.', href: '/finder', cta: 'How' })
