@@ -25,6 +25,8 @@ export async function GET(req: NextRequest) {
         commentCount: true, subscriberCount: true, consentSensitive: true, enrichedAt: true, aiCheckedAt: true, lastSeenAt: true,
         intentScore: true, intentEvidence: true, identityScore: true, ownChannelAi: true,
         platform: true, profileUrl: true, countrySource: true, countryConfidence: true,
+        useCase: true, useCaseDetail: true, forWhom: true, buildStage: true, fitScore: true, reachability: true, opportunityScore: true,
+        discoveryStage: true, inauthentic: true, lastEngagedAt: true, whyTriven: true,
         emails: { select: { id: true, email: true, status: true, source: true, isPrimary: true, isFree: true }, orderBy: { createdAt: 'asc' } },
         lead: { select: { id: true, status: true, campaign: { select: { name: true } } } },
         comments: { orderBy: { score: 'desc' }, take: 1, select: { text: true, video: { select: { title: true, channel: { select: { title: true } } } } } },

@@ -15,7 +15,7 @@ const fetcher = (url: string) => fetch(url).then((r) => r.json())
 interface InboxRow { id: string; displayName: string; email: string; gmailStatus: string; unread: number; replies: number }
 interface Conversation {
   id: string; companyName: string; fullName?: string | null; firstName?: string | null; companyEmail?: string | null
-  status: string; hasReplied: boolean
+  status: string; hasReplied: boolean; replyCategory?: string | null
   senderAccount?: { id: string; displayName: string; email: string } | null
   campaign?: { name: string } | null
   last: { direction: string; subject?: string | null; body?: string | null; createdAt: string } | null
@@ -27,6 +27,7 @@ interface Message {
 }
 interface Thread {
   id: string; companyName: string; fullName?: string | null; companyEmail?: string | null; status: string
+  replyCategory?: string | null; replySuggestion?: string | null
   senderAccount?: { id: string; displayName: string; email: string; gmailStatus: string } | null
   campaign?: { name: string } | null
   emailMessages: Message[]
@@ -190,6 +191,7 @@ function InboxInner() {
               )}
               <div className="flex items-center gap-1.5 mt-1.5">
                 <StatusBadge status={c.status} className="text-[10px]" />
+                {c.replyCategory && <ReplyChip category={c.replyCategory} />}
                 {inbox === 'all' && c.senderAccount && <span className="text-[10px] text-slate-400 truncate">via {c.senderAccount.displayName}</span>}
               </div>
             </button>
@@ -269,6 +271,7 @@ function ThreadView({ thread, onBack, onChanged }: { thread: Thread; onBack: () 
           <div className="flex items-center gap-2">
             <h2 className="text-base font-semibold text-slate-900 truncate">{thread.fullName || thread.companyName}</h2>
             <StatusBadge status={thread.status} />
+            {thread.replyCategory && <ReplyChip category={thread.replyCategory} />}
           </div>
           <p className="text-xs text-slate-500 truncate">
             {thread.fullName && <>{thread.companyName} · </>}{thread.companyEmail}
@@ -315,6 +318,15 @@ function ThreadView({ thread, onBack, onChanged }: { thread: Thread; onBack: () 
       </div>
 
       <footer className="border-t border-slate-200 p-3 bg-white">
+        {thread.replySuggestion && !reply && (
+          <div className="mb-2 rounded-lg border border-indigo-100 bg-indigo-50/50 p-2.5 text-xs">
+            <div className="flex items-center justify-between gap-2">
+              <span className="font-semibold text-indigo-800">Suggested reply</span>
+              <Button size="sm" variant="outline" className="h-6 text-[11px]" onClick={() => setReply(thread.replySuggestion || '')}>Use it (edit before sending)</Button>
+            </div>
+            <p className="mt-1 whitespace-pre-wrap text-slate-700">{thread.replySuggestion}</p>
+          </div>
+        )}
         <div className="flex items-center gap-2 mb-2 text-xs text-slate-500">
           Replying from <Badge variant="secondary" className="text-xs">{sender ? `${sender.displayName} <${sender.email}>` : 'no inbox'}</Badge>
           in the same thread
@@ -339,4 +351,16 @@ function ThreadView({ thread, onBack, onChanged }: { thread: Thread; onBack: () 
 
 export default function InboxPage() {
   return <Suspense fallback={<div className="p-8 text-sm text-slate-400">Loading…</div>}><InboxInner /></Suspense>
+}
+
+const REPLY_STYLE: Record<string, [string, string]> = {
+  INTERESTED: ['Interested', 'bg-emerald-50 text-emerald-700'], MEETING: ['Wants a call', 'bg-emerald-100 text-emerald-800'],
+  QUESTION: ['Question', 'bg-sky-50 text-sky-700'], NOT_NOW: ['Not now', 'bg-amber-50 text-amber-700'],
+  NOT_INTERESTED: ['Not interested', 'bg-slate-100 text-slate-500'], UNSUBSCRIBE: ['Unsubscribed', 'bg-red-50 text-red-600'],
+  OUT_OF_OFFICE: ['Out of office', 'bg-slate-100 text-slate-500'], REFERRAL: ['Referral', 'bg-violet-50 text-violet-700'], OTHER: ['Reply', 'bg-slate-100 text-slate-500'],
+}
+
+function ReplyChip({ category }: { category: string }) {
+  const [label, cls] = REPLY_STYLE[category] || REPLY_STYLE.OTHER
+  return <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-medium ${cls}`}>{label}</span>
 }

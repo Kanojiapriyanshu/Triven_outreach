@@ -1,4 +1,5 @@
 'use client'
+import { CapabilitiesCard, ExclusionsCard } from '@/components/settings/IntelligenceSettings'
 import { useEffect, useState } from 'react'
 import useSWR from 'swr'
 import { toast } from 'sonner'
@@ -302,6 +303,9 @@ export default function SettingsPage() {
           )}
         </CardContent>
       </Card>
+
+      <CapabilitiesCard />
+      <ExclusionsCard />
     </div>
   )
 }

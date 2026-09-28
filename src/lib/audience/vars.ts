@@ -1,5 +1,6 @@
 // Template variables for leads that came from the YouTube audience. Browser-safe.
 import { INTERESTS, type Interest } from './taxonomy'
+import { USE_CASES, type UseCase } from './usecases'
 
 export interface AudienceLeadFields {
   sourcePlatform?: string | null
@@ -8,6 +9,9 @@ export interface AudienceLeadFields {
   commentTopic?: string | null
   interestCategory?: string | null
   persona?: string | null
+  /** Use case (what they want to build) and their blocker, set when the lead came from Audience */
+  useCase?: string | null
+  companyPainPoint?: string | null
 }
 
 /** Text we didn't write goes into templates: strip anything the renderer treats as syntax */
@@ -49,13 +53,25 @@ export function audienceVars(lead: AudienceLeadFields, firstName: string): Recor
     ? `{I came across|I saw|I was reading} your comment ${where}${topic ? ` about ${topic}` : ''}.`
     : topic ? `{I came across|I saw} a comment of yours about ${topic}.` : ''
 
+  const uc = lead.useCase && lead.useCase !== 'UNKNOWN' ? USE_CASES[lead.useCase as UseCase] : null
+  // Their blocker in their words, only when it's short enough to read naturally
+  const blocker = plain(lead.companyPainPoint || '').replace(/[.]+$/, '')
+  const blockerLine = blocker && blocker.length <= 90 && !/;/.test(blocker)
+    ? `{You mentioned|You said} "${blocker}", {which is usually the part that takes the longest|and that's the part most people get stuck on}.`
+    : ''
+
   return {
     sourceChannel: channel,
     sourceVideo: video,
     commentTopic: topic,
     commentHook,
     useCase: interest.useCase,
-    useCaseShort: interest.short,
+    useCaseShort: uc?.short || interest.short,
+    // "Custom AI workflow" → "custom AI workflow" (acronyms keep their capitals)
+    useCaseLabel: uc ? uc.label.replace(/^([A-Z])(?=[a-z])/, (c) => c.toLowerCase()) : interest.short.replace(/^an? /, ''),
     useCaseExamples: interest.examples,
+    blockerLine,
+    isAgency: ['AGENCY', 'CONSULTANT', 'FREELANCER'].includes(lead.persona || '') ? '1' : '',
+    isDeveloper: ['DEVELOPER', 'TECH_PRO'].includes(lead.persona || '') ? '1' : '',
   }
 }

@@ -74,7 +74,7 @@ const TOOL_NAMES: Record<string, string> = {
   elevenlabs: 'ElevenLabs', synthflow: 'Synthflow', 'relevance ai': 'Relevance AI', airtable: 'Airtable', supabase: 'Supabase',
 }
 
-function industryPhrase(text: string) {
+export function industryPhrase(text: string) {
   const m = text.match(INDUSTRY_RE)?.[1]?.toLowerCase()
   if (!m) return ''
   const map: Record<string, string> = {

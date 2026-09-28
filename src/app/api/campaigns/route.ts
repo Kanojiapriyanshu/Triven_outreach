@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 import { requireAuth } from '@/lib/auth'
 import prisma from '@/lib/prisma'
+import { campaignCapacity } from '@/lib/capacity'
 
 const campaignSchema = z.object({
   name: z.string().min(1),
@@ -21,6 +22,9 @@ const campaignSchema = z.object({
   gapMinMinutes: z.number().int().min(1).max(240).nullish(),
   gapMaxMinutes: z.number().int().min(1).max(240).nullish(),
   senderAccountIds: z.array(z.string()).optional(),
+  autoPush: z.boolean().optional(),
+  recipientHours: z.boolean().optional(),
+  abTest: z.boolean().optional(),
 })
 
 export async function GET() {
@@ -49,8 +53,9 @@ export async function GET() {
     ])
     return { ...c, stats: { queued, noEmail, contacted, sentToday, replied, bounced, followUpsPending } }
   }))
-
-  return NextResponse.json(withStats)
+  // Why each campaign is (not) sending right now
+  const capacity = new Map((await campaignCapacity()).map((c) => [c.id, { state: c.state, reason: c.reason, capacityToday: c.capacityToday }]))
+  return NextResponse.json(withStats.map((c) => ({ ...c, capacity: capacity.get(c.id) || null })))
 }
 
 export async function POST(req: NextRequest) {

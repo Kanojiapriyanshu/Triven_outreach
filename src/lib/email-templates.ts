@@ -11,6 +11,8 @@ export const templateSchema = z.object({
   type: z.enum(TEMPLATE_TYPES),
   campaignId: z.string().nullish(),
   isDefault: z.boolean().optional(),
+  // "B" = the alternative first email of an A/B test (never the default)
+  variant: z.enum(['B']).nullish(),
 }).refine(t => t.type.startsWith('FOLLOW_UP') || t.subject.length > 0, {
   message: 'Subject is required', path: ['subject'],
 })

@@ -14,6 +14,7 @@ import { dailyAllowance, deliverEmail, assertSendable, scheduleFollowUps, Outrea
 import { sendTask, refreshNextFollowUp, SCHEDULED_EMAIL_TYPES } from './followups'
 import { pickDefaultTemplate, FOLLOW_UP_TYPES } from './template'
 import { flagDisconnected } from './replies'
+import { recipientWindow } from './recipient-time'
 
 const QUEUED_STATUSES = ['NEW', 'READY_TO_CONTACT', 'RESEARCHING']
 const PRIORITY_RANK: Record<string, number> = { URGENT: 0, HIGH: 1, MEDIUM: 2, LOW: 3 }
@@ -63,7 +64,7 @@ export async function runSequencer(deadline: number): Promise<SequencerResult> {
     const sentToday = c.sendingStatus === 'ACTIVE'
       ? await prisma.lead.count({ where: { campaignId: c.id, firstEmailSentAt: { gte: new Date(Date.now() - 86_400_000) } } })
       : 0
-    lanes.set(c.id, { campaign: c, schedule, open: isInSendWindow(now, schedule.window), freeAt, sentToday, blocked: false })
+    lanes.set(c.id, { campaign: c, schedule, open: c.recipientHours || isInSendWindow(now, schedule.window), freeAt, sentToday, blocked: false })
   }
   for (const l of lanes.values()) {
     if (!l.campaign) continue
@@ -72,7 +73,7 @@ export async function runSequencer(deadline: number): Promise<SequencerResult> {
   }
 
   // ── Inboxes: least recently used first; each needs its own gap + allowance ──
-  const senders = await prisma.senderAccount.findMany({ where: { isActive: true, gmailStatus: 'CONNECTED' } })
+  const senders = await prisma.senderAccount.findMany({ where: { isActive: true, gmailStatus: 'CONNECTED', OR: [{ pausedUntil: null }, { pausedUntil: { lt: now } }] } })
   const inboxes = await Promise.all(senders.map(async (sender) => {
     const last = await prisma.emailMessage.findFirst({
       where: { direction: 'OUTBOUND', fromAddress: sender.email },
@@ -125,7 +126,7 @@ async function sendOne(
   ctx: {
     settings: OutreachSettings
     lanes: Map<string, Lane>
-    firstTemplates: Array<{ id: string; type: string; campaignId: string | null; isDefault: boolean; subject: string; body: string }>
+    firstTemplates: Array<{ id: string; type: string; campaignId: string | null; isDefault: boolean; subject: string; body: string; variant: string | null }>
     result: SequencerResult
     deadline: number
   },
@@ -199,6 +200,15 @@ async function sendOne(
       take: 50,
     })
     if (!candidates.length) return 'queue empty'
+    const localOk = (l: (typeof candidates)[number]) => {
+      const c = lanes.get(l.campaignId ?? NO_CAMPAIGN)?.campaign
+      if (!c?.recipientHours) return true
+      const w = recipientWindow(l.country, l.state)
+      return w ? isInSendWindow(new Date(), w) : isInSendWindow(new Date(), lanes.get(l.campaignId!)!.schedule.window)
+    }
+    const inHours = candidates.filter(localOk)
+    if (!inHours.length) return 'queued people are outside their business hours'
+    candidates.splice(0, candidates.length, ...inHours)
     // Like Instantly, the inbox is decided at send time: any free inbox takes the next lead,
     // preferring leads already assigned to it, then higher priority, then oldest
     candidates.sort((a, b) =>
@@ -208,7 +218,10 @@ async function sendOne(
     const lane = laneOf(lead.campaignId)!
     const campaign = lane.campaign!
 
-    const template = pickDefaultTemplate(ctx.firstTemplates, 'FIRST_EMAIL', campaign.id)
+    // A/B: half the leads (stable by id) get variant B when the campaign tests one
+    const variantB = campaign.abTest ? ctx.firstTemplates.find((t) => t.campaignId === campaign.id && t.variant === 'B') : undefined
+    const useB = !!variantB && hashId(lead.id) % 2 === 1
+    const template = useB ? variantB : pickDefaultTemplate(ctx.firstTemplates.filter((t) => t.variant !== 'B'), 'FIRST_EMAIL', campaign.id)
     if (!template) {
       lane.blocked = true
       result.errors.push(`Campaign "${campaign.name}" has no first-email template. Add one in Templates.`)
@@ -218,12 +231,13 @@ async function sendOne(
     try {
       await assertSendable(lead, sender)
       await deliverEmail({ lead, sender, subject: template.subject, body: template.body, kind: 'FIRST_EMAIL', auto: true })
+      if (campaign.abTest) await prisma.lead.update({ where: { id: lead.id }, data: { templateVariant: useB ? 'B' : 'A' } })
       await scheduleFollowUps({
         leadId: lead.id,
         senderAccountId: sender.id,
         base: new Date(),
         plan: [campaign.followUpDay1, campaign.followUpDay2, campaign.followUpDay3].map((delayDays, i) => ({ step: i + 1, delayDays })),
-        window: lane.schedule.window,
+        window: (campaign.recipientHours && recipientWindow(lead.country, lead.state)) || lane.schedule.window,
       })
       await refreshNextFollowUp(lead.id)
       lane.sentToday++
@@ -242,4 +256,10 @@ async function sendOne(
     }
   }
   return 'nothing sent'
+}
+
+function hashId(id: string) {
+  let h = 0
+  for (const c of id) h = (h * 31 + c.charCodeAt(0)) >>> 0
+  return h
 }

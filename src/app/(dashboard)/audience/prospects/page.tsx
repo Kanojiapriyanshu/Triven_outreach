@@ -4,7 +4,8 @@ import useSWR from 'swr'
 import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { toast } from 'sonner'
-import { UserSearch, Search, ChevronLeft, ChevronRight, Send, RefreshCw, MailCheck, Ban, Trash2, X, Globe, Download } from 'lucide-react'
+import { UserSearch, Search, ChevronLeft, ChevronRight, Send, RefreshCw, MailCheck, Ban, Trash2, X, Globe, Download, BookmarkPlus, ShieldAlert } from 'lucide-react'
+import { USE_CASES, useCaseLabel, BUILD_STAGES } from '@/lib/audience/usecases'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Card } from '@/components/ui/card'
@@ -33,13 +34,22 @@ interface Row {
   emails: Array<{ id: string; email: string; status: string; isPrimary: boolean; isFree: boolean }>
   lead: { id: string; status: string; campaign: { name: string } | null } | null
   comments: Array<{ text: string; video: { title: string; channel: { title: string } } }>
+  useCase: string | null; useCaseDetail: string | null; forWhom: string | null; buildStage: string | null
+  fitScore: number; reachability: number; opportunityScore: number; discoveryStage: string; inauthentic: boolean; lastEngagedAt: string | null; whyTriven: string | null
 }
 interface Page { data: Row[]; total: number; page: number; totalPages: number }
 
-const FILTER_KEYS = ['q', 'relevance', 'persona', 'interest', 'status', 'email', 'region', 'channelId', 'videoId', 'sort', 'hideSpam', 'identified', 'minIntent', 'ownChannelAi', 'country', 'platform'] as const
+const FILTER_KEYS = ['q', 'relevance', 'persona', 'interest', 'status', 'email', 'region', 'channelId', 'videoId', 'sort', 'hideSpam', 'identified', 'minIntent', 'ownChannelAi', 'country', 'platform',
+  'useCase', 'forWhom', 'stage', 'discovery', 'vertical', 'minFit', 'minOpportunity', 'minReach', 'freshDays', 'inauthentic', 'qra', 'warmTouch'] as const
 
 const QUICK: Array<{ label: string; params: Record<string, string> }> = [
+  { label: 'Best opportunities', params: { sort: 'opportunity', minOpportunity: '1' } },
+  { label: 'Qualified reachable (QRA)', params: { qra: 'true', sort: 'opportunity' } },
   { label: 'Ready to contact', params: { status: 'READY_TO_CONTACT' } },
+  { label: 'Fresh (last 14 days)', params: { freshDays: '14', relevance: 'HIGH,MEDIUM', sort: 'opportunity' } },
+  { label: 'Builds for clients', params: { forWhom: 'CLIENTS', sort: 'opportunity' } },
+  { label: 'High fit, no email (warm touch)', params: { minFit: '60', email: 'none', relevance: 'HIGH' } },
+  { label: 'Suspected paid engagement', params: { inauthentic: 'true' } },
   { label: 'Strong buying intent', params: { relevance: 'HIGH' } },
   { label: 'Business email', params: { email: 'business' } },
   { label: 'Identified (site / LinkedIn / company)', params: { identified: 'true', relevance: 'HIGH' } },
@@ -68,6 +78,17 @@ function ProspectsInner() {
   const { data: channels } = useSWR<Array<{ id: string; title: string }>>('/api/audience/channels', fetcher)
   const rows = data?.data ?? []
   const total = data?.total ?? 0
+
+  async function saveSegment() {
+    const name = prompt('Name this segment (e.g. "US agencies building voice agents")')
+    if (!name?.trim()) return
+    const filters = Object.fromEntries(new URLSearchParams(filterString))
+    delete filters.sort
+    const res = await fetch('/api/audience/segments', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: name.trim(), filters }) })
+    const d = await res.json().catch(() => ({}))
+    if (!res.ok) return toast.error(d.error || 'Could not save')
+    toast.success(`Segment saved (${d.count ?? 0} people). Attach it to a campaign on the Segments page.`)
+  }
 
   function setFilter(patch: Record<string, string | null>, replace = false) {
     const p = new URLSearchParams(replace ? '' : filterString)
@@ -102,8 +123,11 @@ function ProspectsInner() {
         section="Audience"
         title="Prospects"
         icon={UserSearch}
-        description="One row per person across YouTube and Hacker News, ranked by buying intent. Open a row for the evidence, their emails and a preview of the first email."
-        actions={<Button size="sm" variant="outline" asChild><a href={`/api/audience/prospects/export?${filterString}`}><Download className="h-3.5 w-3.5" />Export CSV</a></Button>}
+        description="One row per person across YouTube, Hacker News and DEV: what they want to build, how well Triven fits, how reachable they are. Open a row for the evidence, emails and the first email."
+        actions={<>
+          <Button size="sm" variant="outline" onClick={saveSegment} disabled={!filterString}><BookmarkPlus className="h-3.5 w-3.5" />Save as segment</Button>
+          <Button size="sm" variant="outline" asChild><a href={`/api/audience/prospects/export?${filterString}`}><Download className="h-3.5 w-3.5" />Export CSV</a></Button>
+        </>}
       />
 
       <Card className="p-4 space-y-3">
@@ -124,14 +148,17 @@ function ProspectsInner() {
           </div>
           <Sel value={sp.get('relevance') || ''} onChange={(v) => setFilter({ relevance: v })} options={[['', 'Any intent'], ['HIGH', 'High intent'], ['MEDIUM', 'Medium'], ['HIGH,MEDIUM', 'High + medium'], ['LOW', 'Low'], ['SPAM', 'Spam']]} />
           <Sel value={sp.get('persona') || ''} onChange={(v) => setFilter({ persona: v })} options={[['', 'Any persona'], ...Object.entries(PERSONAS).map(([k, v]) => [k, v.label] as [string, string])]} />
+          <Sel value={sp.get('useCase') || ''} onChange={(v) => setFilter({ useCase: v })} options={[['', 'Any use case'], ...Object.entries(USE_CASES).map(([k, v]) => [k, v.label] as [string, string])]} />
+          <Sel value={sp.get('stage') || ''} onChange={(v) => setFilter({ stage: v })} options={[['', 'Any stage'], ...Object.entries(BUILD_STAGES) as Array<[string, string]>]} />
+          <Sel value={sp.get('minFit') || ''} onChange={(v) => setFilter({ minFit: v })} options={[['', 'Any fit'], ['40', 'Fit 40+'], ['60', 'Fit 60+'], ['80', 'Fit 80+']]} />
           <Sel value={sp.get('interest') || ''} onChange={(v) => setFilter({ interest: v })} options={[['', 'Any interest'], ...Object.entries(INTERESTS).map(([k, v]) => [k, v.label] as [string, string])]} />
           <Sel value={sp.get('status') || ''} onChange={(v) => setFilter({ status: v })} options={[['', 'Any status'], ...Object.entries(PROSPECT_STATUSES) as Array<[string, string]>]} />
           <Sel value={sp.get('email') || ''} onChange={(v) => setFilter({ email: v })} options={[['', 'Any email'], ['business', 'Verified business email'], ['verified', 'Any verified email'], ['any', 'Has an email'], ['none', 'No email']]} />
           <Sel value={sp.get('region') || ''} onChange={(v) => setFilter({ region: v, country: null })} options={[['', 'Any region'], ...Object.entries(REGIONS) as Array<[string, string]>]} />
           <Sel value={sp.get('country') || ''} onChange={(v) => setFilter({ country: v })} options={[['', 'Any country'], ...ENGLISH_COUNTRIES.map((c) => [c, `${flag(c)} ${COUNTRIES[c].name}`] as [string, string]), ['UNKNOWN', 'Country unknown']]} />
-          <Sel value={sp.get('platform') || ''} onChange={(v) => setFilter({ platform: v })} options={[['', 'All sources'], ['YOUTUBE', 'YouTube'], ['HN', 'Hacker News']]} />
+          <Sel value={sp.get('platform') || ''} onChange={(v) => setFilter({ platform: v })} options={[['', 'All sources'], ['YOUTUBE', 'YouTube'], ['HN', 'Hacker News'], ['DEVTO', 'DEV']]} />
           <Sel value={sp.get('channelId') || ''} onChange={(v) => setFilter({ channelId: v, videoId: null })} options={[['', 'Any source channel'], ...(Array.isArray(channels) ? channels : []).map((c) => [c.id, c.title] as [string, string])]} />
-          <Sel value={sp.get('sort') || ''} onChange={(v) => setFilter({ sort: v })} options={[['', 'Highest intent'], ['recent', 'Most recent'], ['comments', 'Most comments'], ['subscribers', 'Biggest channel']]} />
+          <Sel value={sp.get('sort') || ''} onChange={(v) => setFilter({ sort: v })} options={[['', 'Highest intent'], ['opportunity', 'Best opportunity'], ['fit', 'Best fit'], ['fresh', 'Most recent comment'], ['recent', 'Last seen'], ['comments', 'Most comments'], ['subscribers', 'Biggest channel']]} />
         </div>
         {sp.get('videoId') && <p className="text-xs text-slate-500">Showing people from one video. <button onClick={() => setFilter({ videoId: null })} className="text-indigo-600 underline">Show all</button></p>}
 
@@ -168,7 +195,7 @@ function ProspectsInner() {
                   <input type="checkbox" checked={pageAll} onChange={() => { setAllMatching(false); setSelected(pageAll ? new Set() : new Set(rows.map((r) => r.id))) }} />
                 </th>
                 <th className="text-left px-3 py-3 font-semibold">Person</th>
-                <th className="text-left px-3 py-3 font-semibold">Intent</th>
+                <th className="text-left px-3 py-3 font-semibold">Opportunity</th>
                 <th className="text-left px-3 py-3 font-semibold min-w-[320px]">What they said</th>
                 <th className="text-left px-3 py-3 font-semibold">Email</th>
                 <th className="text-left px-3 py-3 font-semibold">Status</th>
@@ -209,12 +236,18 @@ function ProspectsInner() {
                       </div>
                     </td>
                     <td className="px-3 py-3">
-                      <RelevanceBadge value={r.relevance} score={r.intentScore} />
-                      <p className="text-[11px] text-slate-500 mt-1">{interestLabel(r.interestCategory)}</p>
-                      <p className={`text-[10px] mt-0.5 ${r.identityScore >= 40 ? 'text-emerald-700' : 'text-slate-400'}`} title="How sure we are who they are">identity {r.identityScore}</p>
+                      <div className="flex items-center gap-2">
+                        <span className={`text-lg font-semibold tabular-nums ${r.opportunityScore >= 50 ? 'text-emerald-700' : r.opportunityScore >= 25 ? 'text-amber-600' : 'text-slate-400'}`} title="Intent × fit × reachability × freshness">{r.opportunityScore}</span>
+                        <RelevanceBadge value={r.relevance} score={r.intentScore} />
+                      </div>
+                      <p className="text-[10px] text-slate-500 mt-0.5 whitespace-nowrap" title="Intent / fit / reach / identity">intent {r.intentScore} · fit {r.fitScore} · reach {r.reachability}</p>
+                      <p className="text-[11px] text-slate-600 mt-0.5">{r.useCase && r.useCase !== 'UNKNOWN' ? useCaseLabel(r.useCase) : interestLabel(r.interestCategory)}{r.forWhom === 'CLIENTS' ? ' · for clients' : ''}</p>
+                      {r.inauthentic && <p className="mt-0.5 flex items-center gap-1 text-[10px] text-red-600"><ShieldAlert className="h-3 w-3" />suspected paid</p>}
+                      {r.lastEngagedAt && Date.now() - new Date(r.lastEngagedAt).getTime() < 14 * 86_400_000 && <p className="text-[10px] text-emerald-600">fresh</p>}
                     </td>
                     <td className="px-3 py-3">
-                      {r.topic && <p className="text-xs font-medium text-slate-700">about {r.topic}</p>}
+                      {(r.useCaseDetail || r.topic) && <p className="text-xs font-medium text-slate-700">{r.useCaseDetail || `about ${r.topic}`}</p>}
+                      {r.whyTriven && <p className="text-[11px] text-indigo-800 line-clamp-2 mt-0.5" title={r.whyTriven}>{r.whyTriven.replace(/\s*\[E\d+\]/g, '')}</p>}
                       {r.intentEvidence.filter((e) => e !== 'No buying signals').length > 0 && (
                         <div className="flex flex-wrap gap-1 my-1">
                           {r.intentEvidence.filter((e) => e !== 'No buying signals').slice(0, 3).map((e) => <span key={e} className="rounded bg-emerald-50 px-1.5 py-0.5 text-[10px] text-emerald-800">{e}</span>)}

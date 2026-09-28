@@ -35,7 +35,7 @@ export async function GET(req: NextRequest) {
     where,
     select: {
       id: true, companyName: true, fullName: true, firstName: true, companyEmail: true, status: true,
-      hasReplied: true, lastContactedAt: true, lastResponseAt: true,
+      hasReplied: true, lastContactedAt: true, lastResponseAt: true, replyCategory: true,
       senderAccount: { select: { id: true, displayName: true, email: true } },
       campaign: { select: { name: true } },
       emailMessages: {

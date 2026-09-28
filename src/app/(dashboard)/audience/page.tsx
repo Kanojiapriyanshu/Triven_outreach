@@ -1,4 +1,5 @@
 'use client'
+import { useCaseLabel } from '@/lib/audience/usecases'
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import useSWR from 'swr'
@@ -39,6 +40,10 @@ interface Overview {
   byRegion: Array<{ key: string; count: number }>
   byCountry: Array<{ key: string; count: number }>
   byPlatform: Array<{ key: string; count: number }>
+  stages: Record<string, number>
+  byUseCase: Array<{ key: string; count: number }>
+  qra: number
+  inauthentic: number
   sources: Array<{ id: string; title: string; handle: string | null; thumbnailUrl: string | null; subscriberCount: number; videos: number; comments: number; prospects: number; relevant: number; withEmail: number; verified: number; contacted: number; replied: number; interested: number; meetings: number }>
 }
 interface Readiness {
@@ -247,13 +252,17 @@ export default function AudienceOverviewPage() {
         </div>
       </div>
 
+      {/* Discovery funnel */}
+      {data && <DiscoveryFunnel stages={data.stages} qra={data.qra} inauthentic={data.inauthentic} />}
+
       {/* Breakdown */}
       <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
+        <Breakdown title="What they want to build" rows={(data?.byUseCase || []).map((r) => ({ label: useCaseLabel(r.key === 'UNKNOWN' ? null : r.key) === '—' ? 'Not clear yet' : useCaseLabel(r.key), count: r.count, href: `/audience/prospects?useCase=${r.key}` }))} />
         <Breakdown title="By interest" rows={(data?.byInterest || []).map((r) => ({ label: INTERESTS[r.key as Interest]?.label || 'Not clear', count: r.count, href: `/audience/prospects?interest=${r.key}` }))} />
         <Breakdown title="By persona" rows={(data?.byPersona || []).map((r) => ({ label: PERSONAS[r.key as Persona]?.label || 'Not clear yet', count: r.count, href: `/audience/prospects?persona=${r.key}` }))} />
         <Breakdown title="By country" rows={(data?.byCountry || []).map((r) => ({ label: r.key === 'UNKNOWN' ? 'Not known yet' : `${flag(r.key)} ${COUNTRIES[r.key]?.name || r.key}`, count: r.count, href: `/audience/prospects?country=${r.key}` }))} />
         <Breakdown title="By region" rows={(data?.byRegion || []).map((r) => ({ label: REGIONS[r.key as Region] || 'Unknown', count: r.count, href: r.key !== 'UNKNOWN' ? `/audience/prospects?region=${r.key}` : undefined }))} />
-        <Breakdown title="By source" rows={(data?.byPlatform || []).map((r) => ({ label: r.key === 'HN' ? 'Hacker News' : 'YouTube', count: r.count, href: `/audience/prospects?platform=${r.key}` }))} />
+        <Breakdown title="By source" rows={(data?.byPlatform || []).map((r) => ({ label: r.key === 'HN' ? 'Hacker News' : r.key === 'DEVTO' ? 'DEV' : 'YouTube', count: r.count, href: `/audience/prospects?platform=${r.key}` }))} />
       </div>
 
       {/* Sources */}
@@ -564,6 +573,46 @@ function Blockers({ r, hunter, onFix, fixing }: { r: Readiness; hunter: boolean;
           ))}
           <p className="text-[11px] text-slate-400">You can change these any time under Rules.</p>
         </div>
+      </CardContent>
+    </Card>
+  )
+}
+
+// Where relevant people are in the pipeline, left to right, each step linking to who's stuck there
+const DISCOVERY_STEPS: Array<[string[], string]> = [
+  [['COLLECTED', 'QUALIFIED'], 'Qualified, not researched'],
+  [['RESEARCHED'], 'Researched'],
+  [['IDENTITY_CONFIRMED'], 'Identity confirmed'],
+  [['EMAIL_CANDIDATES'], 'Email found'],
+  [['VERIFIED'], 'Verified (blocked by rules)'],
+  [['READY'], 'Ready'],
+  [['CONTACTED'], 'Contacted'],
+]
+
+function DiscoveryFunnel({ stages, qra, inauthentic }: { stages: Record<string, number>; qra: number; inauthentic: number }) {
+  const rows = DISCOVERY_STEPS.map(([keys, label]) => ({ keys, label, count: keys.reduce((n, k) => n + (stages[k] || 0), 0) }))
+  const max = Math.max(1, ...rows.map((r) => r.count))
+  const unreachable = (stages.UNREACHABLE || 0) + (stages.NOT_QUALIFIED || 0)
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <CardTitle className="flex flex-wrap items-baseline justify-between gap-2">
+          <span>Discovery pipeline <span className="text-sm font-normal text-slate-500">· relevant people by stage</span></span>
+          <span className="text-sm font-normal text-slate-600">Qualified reachable audience: <strong className="text-lg text-emerald-700">{qra.toLocaleString('en-US')}</strong></span>
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-1.5">
+        {rows.map((r) => (
+          <Link key={r.label} href={`/audience/prospects?discovery=${r.keys.join(',')}&relevance=HIGH,MEDIUM`} className="grid grid-cols-[180px_1fr_60px] items-center gap-2 rounded px-1 hover:bg-slate-50">
+            <span className="text-xs text-slate-600">{r.label}</span>
+            <span className="h-3 rounded-r bg-slate-100"><span className="block h-full rounded-r-[4px] bg-indigo-500" style={{ width: `${Math.max(r.count ? 1.5 : 0, (100 * r.count) / max)}%` }} /></span>
+            <span className="text-right text-xs tabular-nums text-slate-800">{r.count.toLocaleString('en-US')}</span>
+          </Link>
+        ))}
+        <p className="pt-1 text-[11px] text-slate-400">
+          {unreachable.toLocaleString('en-US')} unreachable or not qualified after research
+          {inauthentic > 0 && <> · <Link href="/audience/prospects?inauthentic=true" className="text-red-600 hover:underline">{inauthentic.toLocaleString('en-US')} suspected paid engagement (excluded)</Link></>}
+        </p>
       </CardContent>
     </Card>
   )

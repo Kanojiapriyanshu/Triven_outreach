@@ -46,6 +46,27 @@ export function prospectWhere(sp: URLSearchParams): Prisma.ProspectWhereInput {
   else if (channelId) and.push({ comments: { some: { video: { channelId } } } })
   if (sp.get('enriched') === 'true') and.push({ enrichedAt: { not: null } })
   if (sp.get('enriched') === 'false') and.push({ enrichedAt: null })
+
+  // Intelligence (PRD M3/M5): what they build, fit, opportunity, freshness, stage
+  if (list('useCase').length) and.push({ useCase: { in: list('useCase') } })
+  if (list('forWhom').length) and.push({ forWhom: { in: list('forWhom') } })
+  if (list('stage').length) and.push({ buildStage: { in: list('stage') } })
+  if (list('discovery').length) and.push({ discoveryStage: { in: list('discovery') } })
+  const vertical = sp.get('vertical')?.trim()
+  if (vertical) and.push({ vertical: { contains: vertical, mode: 'insensitive' } })
+  const minFit = Number(sp.get('minFit') || 0)
+  if (minFit > 0) and.push({ fitScore: { gte: minFit } })
+  const minOpp = Number(sp.get('minOpportunity') || 0)
+  if (minOpp > 0) and.push({ opportunityScore: { gte: minOpp } })
+  const minReach = Number(sp.get('minReach') || 0)
+  if (minReach > 0) and.push({ reachability: { gte: minReach } })
+  const fresh = Number(sp.get('freshDays') || 0)
+  if (fresh > 0) and.push({ lastEngagedAt: { gte: new Date(Date.now() - fresh * 86_400_000) } })
+  if (list('channelIds').length) and.push({ comments: { some: { video: { channel: { id: { in: list('channelIds') } } } } } })
+  if (sp.get('inauthentic') === 'true') and.push({ inauthentic: true })
+  else if (sp.get('inauthentic') !== 'any') and.push({ inauthentic: false })
+  if (sp.get('qra') === 'true') and.push({ intentScore: { gte: 60 }, fitScore: { gte: 60 }, reachability: { gte: 80 } })
+  if (sp.get('warmTouch') === 'true') and.push({ warmTouch: { in: ['TODO', 'TOUCHED', 'RESPONDED'] } })
   return and.length ? { AND: and } : {}
 }
 
@@ -54,6 +75,9 @@ export function prospectOrder(sort?: string | null): Prisma.ProspectOrderByWithR
     case 'recent': return [{ lastSeenAt: 'desc' }]
     case 'subscribers': return [{ subscriberCount: 'desc' }]
     case 'comments': return [{ commentCount: 'desc' }, { score: 'desc' }]
+    case 'opportunity': return [{ opportunityScore: 'desc' }, { intentScore: 'desc' }]
+    case 'fit': return [{ fitScore: 'desc' }, { intentScore: 'desc' }]
+    case 'fresh': return [{ lastEngagedAt: { sort: 'desc', nulls: 'last' } }]
     default: return [{ score: 'desc' }, { lastSeenAt: 'desc' }]
   }
 }

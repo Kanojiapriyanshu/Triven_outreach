@@ -47,6 +47,9 @@ model SenderAccount {
   isActive         Boolean   @default(true)
   signature        String?   @db.Text
   timezone         String    @default("America/New_York")
+  // Auto-paused after repeated bounces (deliverability guard); null = sending normally
+  pausedUntil      DateTime?
+  pauseReason      String?
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
 
@@ -63,33 +66,41 @@ model SenderAccount {
 // ─────────────────────────────────────────────────────────────────────────────
 
 model Campaign {
-  id             String    @id @default(cuid())
-  name           String
-  industry       String
-  targetCountry  String?
-  targetLocation String?
-  product        String?
-  description    String?   @db.Text
-  timezone       String    @default("America/New_York")
+  id              String    @id @default(cuid())
+  name            String
+  industry        String
+  targetCountry   String?
+  targetLocation  String?
+  product         String?
+  description     String?   @db.Text
+  timezone        String    @default("America/New_York")
   // Follow-up schedule: days after first email
-  followUpDay1   Int       @default(1)
-  followUpDay2   Int       @default(2)
-  followUpDay3   Int       @default(3)
-  isActive       Boolean   @default(true)
-  isPaused       Boolean   @default(false)
+  followUpDay1    Int       @default(1)
+  followUpDay2    Int       @default(2)
+  followUpDay3    Int       @default(3)
+  isActive        Boolean   @default(true)
+  isPaused        Boolean   @default(false)
   // Auto-sending (Instantly-style): only ACTIVE campaigns email their queued leads
-  sendingStatus  String    @default("DRAFT") // DRAFT | ACTIVE | PAUSED
-  dailyNewLeads  Int       @default(30) // max first emails per day for this campaign
-  launchedAt     DateTime?
+  sendingStatus   String    @default("DRAFT") // DRAFT | ACTIVE | PAUSED
+  dailyNewLeads   Int       @default(30) // max first emails per day for this campaign
+  launchedAt      DateTime?
   // Campaign schedule (null = use the global Settings): window in the Settings timezone,
   // send days ("1,2,3,4,5" = Mon–Fri) and the gap between emails as inboxes take turns
-  windowStart    String?
-  windowEnd      String?
-  sendDays       String?
-  gapMinMinutes  Int?
-  gapMaxMinutes  Int?
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
+  windowStart     String?
+  windowEnd       String?
+  sendDays        String?
+  gapMinMinutes   Int?
+  gapMaxMinutes   Int?
+  // Audience intelligence
+  useCase         String? // use-case campaign (AI_RECEPTIONIST, VOICE_AGENT …); null = niche/persona campaign
+  segmentId       String? // audience segment that feeds this campaign
+  launchCheckedAt DateTime? // 20 sample emails reviewed before launch
+  autoPush        Boolean   @default(false) // READY prospects routed here are added automatically
+  recipientHours  Boolean   @default(false) // first emails only in the recipient's local business hours
+  abTest          Boolean   @default(false) // alternate first-email variants A/B
+  pausedReason    String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
 
   leads          Lead[]
   senderAccounts CampaignSenderAccount[]
@@ -198,6 +209,14 @@ model Lead {
   // Lead Finder source (local business found on Google Maps / OpenStreetMap)
   businessId String? @unique
 
+  // Intelligence + attribution
+  useCase          String?
+  replyCategory    String? // INTERESTED | MEETING | QUESTION | NOT_NOW | NOT_INTERESTED | UNSUBSCRIBE | OUT_OF_OFFICE | REFERRAL | BOUNCE | OTHER
+  replySuggestion  String? @db.Text
+  firstContainerId String? // channel the person was first found on
+  firstContentId   String? // video / thread / article
+  templateVariant  String? // A/B variant of the first email
+
   // Metadata
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -233,6 +252,7 @@ model EmailTemplate {
   type       String // FIRST_EMAIL|FOLLOW_UP_1|FOLLOW_UP_2|FOLLOW_UP_3|OTHER
   campaignId String?
   isDefault  Boolean @default(false)
+  variant    String? // "B" = the alternative first email in an A/B test
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -430,6 +450,10 @@ model AudienceChannel {
   isTracked        Boolean   @default(true)
   lastScannedAt    DateTime?
   notes            String?   @db.Text
+  yieldScore       Float     @default(0) // QRA per 1,000 comments (blended with meetings once known)
+  qualityFlagged   Float     @default(0) // share of comments flagged as coordinated / inauthentic (0-1)
+  autoPaused       Boolean   @default(false)
+  pausedReason     String?
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
 
@@ -462,6 +486,7 @@ model AudienceVideo {
   nextPageToken     String?
   lastError         String?
   lastCollectedAt   DateTime?
+  fastLaneUntil     DateTime? // fresh upload from a top source: re-collected daily until then
   createdAt         DateTime  @default(now())
   updatedAt         DateTime  @updatedAt
 
@@ -475,27 +500,29 @@ model AudienceVideo {
 
 // One public comment. youtubeCommentId makes collection idempotent (never processed twice)
 model AudienceComment {
-  id               String    @id @default(cuid())
-  youtubeCommentId String    @unique
-  videoId          String
-  prospectId       String?
-  authorChannelId  String?
-  authorName       String
-  text             String    @db.Text
-  likeCount        Int       @default(0)
-  replyCount       Int       @default(0)
-  isReply          Boolean   @default(false)
-  parentCommentId  String?
-  publishedAt      DateTime?
-  language         String?
-  relevance        String    @default("LOW") // HIGH | MEDIUM | LOW | SPAM
-  score            Int       @default(0)
-  persona          String?
-  interestCategory String?
-  topic            String? // "building voice agents for clinics"
-  signals          String[]  @default([])
-  classifiedBy     String    @default("RULES") // RULES | AI
-  createdAt        DateTime  @default(now())
+  id                 String    @id @default(cuid())
+  youtubeCommentId   String    @unique
+  videoId            String
+  prospectId         String?
+  authorChannelId    String?
+  authorName         String
+  text               String    @db.Text
+  likeCount          Int       @default(0)
+  replyCount         Int       @default(0)
+  isReply            Boolean   @default(false)
+  parentCommentId    String?
+  publishedAt        DateTime?
+  language           String?
+  relevance          String    @default("LOW") // HIGH | MEDIUM | LOW | SPAM
+  score              Int       @default(0)
+  persona            String?
+  interestCategory   String?
+  topic              String? // "building voice agents for clinics"
+  signals            String[]  @default([])
+  classifiedBy       String    @default("RULES") // RULES | AI
+  flaggedInauthentic Boolean   @default(false) // coordinated / incentivised engagement: no weight in scoring
+  flagReason         String?
+  createdAt          DateTime  @default(now())
 
   video    AudienceVideo @relation(fields: [videoId], references: [id], onDelete: Cascade)
   prospect Prospect?     @relation(fields: [prospectId], references: [id], onDelete: Cascade)
@@ -508,66 +535,96 @@ model AudienceComment {
 
 // A person, keyed by their YouTube channel id: commenting on 5 videos is still one prospect
 model Prospect {
-  id                 String    @id @default(cuid())
-  platform           String    @default("YOUTUBE") // YOUTUBE | HN (external id "hn:<username>")
-  profileUrl         String?
-  youtubeChannelId   String    @unique
-  displayName        String
-  firstName          String?
-  lastName           String?
-  handle             String?
-  avatarUrl          String?
-  channelDescription String?   @db.Text
-  subscriberCount    Int       @default(0)
-  videoCount         Int       @default(0)
-  country            String?
-  countrySource      String? // CHANNEL | HUNTER | LOCATION | LINKEDIN | PHONE | TEXT | CURRENCY | DOMAIN | MANUAL
-  countryConfidence  Int       @default(0)
-  region             String? // AMERICAS | EUROPE | MIDDLE_EAST_AFRICA | ASIA_PACIFIC
-  company            String?
-  jobTitle           String?
-  website            String?
-  linkedIn           String?
-  twitter            String?
-  github             String?
-  otherLinks         String[]  @default([])
-  location           String?
-  bio                String?   @db.Text
-  persona            String? // FOUNDER | AGENCY | CONSULTANT | DEVELOPER | BUSINESS_OWNER | FREELANCER | TECH_PRO | ENTHUSIAST
-  interestCategory   String? // AI_RECEPTIONIST | AI_SALES | AI_DEVELOPMENT | AI_AUTOMATION | GENERAL_AI
-  relevance          String    @default("LOW") // HIGH | MEDIUM | LOW | SPAM
-  score              Int       @default(0)
-  reason             String?   @db.Text // why this person was selected
-  topic              String? // what they talked about, for personalisation
-  icebreaker         String?   @db.Text // one line reacting to their comment (AI pass)
-  bestCommentId      String?
-  commentCount       Int       @default(0)
-  status             String    @default("NEW")
+  id                  String    @id @default(cuid())
+  platform            String    @default("YOUTUBE") // YOUTUBE | HN (external id "hn:<username>")
+  profileUrl          String?
+  youtubeChannelId    String    @unique
+  displayName         String
+  firstName           String?
+  lastName            String?
+  handle              String?
+  avatarUrl           String?
+  channelDescription  String?   @db.Text
+  subscriberCount     Int       @default(0)
+  videoCount          Int       @default(0)
+  country             String?
+  countrySource       String? // CHANNEL | HUNTER | LOCATION | LINKEDIN | PHONE | TEXT | CURRENCY | DOMAIN | MANUAL
+  countryConfidence   Int       @default(0)
+  region              String? // AMERICAS | EUROPE | MIDDLE_EAST_AFRICA | ASIA_PACIFIC
+  company             String?
+  jobTitle            String?
+  website             String?
+  linkedIn            String?
+  twitter             String?
+  github              String?
+  otherLinks          String[]  @default([])
+  location            String?
+  bio                 String?   @db.Text
+  persona             String? // FOUNDER | AGENCY | CONSULTANT | DEVELOPER | BUSINESS_OWNER | FREELANCER | TECH_PRO | ENTHUSIAST
+  interestCategory    String? // AI_RECEPTIONIST | AI_SALES | AI_DEVELOPMENT | AI_AUTOMATION | GENERAL_AI
+  relevance           String    @default("LOW") // HIGH | MEDIUM | LOW | SPAM
+  score               Int       @default(0)
+  reason              String?   @db.Text // why this person was selected
+  topic               String? // what they talked about, for personalisation
+  icebreaker          String?   @db.Text // one line reacting to their comment (AI pass)
+  bestCommentId       String?
+  commentCount        Int       @default(0)
+  status              String    @default("NEW")
   // NEW | RESEARCHING | PROFILE_FOUND | EMAIL_FOUND | EMAIL_VERIFIED | READY_TO_CONTACT | NO_CONTACT
   // | IN_CAMPAIGN | INVALID_EMAIL | DO_NOT_CONTACT
-  consentSensitive   Boolean   @default(false) // EU/UK/CA/AU/NZ: stricter outreach rules
-  intentScore        Int       @default(0) // how likely they want to build/buy (0-100)
-  intentEvidence     String[]  @default([]) // "Runs an agency", "Commented on 3 videos" …
-  identityScore      Int       @default(0) // how sure we are who they are (0-100)
-  ownChannelSummary  String? // "14 videos, mostly about n8n / AI agents"
-  ownChannelAi       Boolean   @default(false) // their own uploads are about AI/automation
-  deepReadAt         DateTime? // own channel + uploads read via the API
-  webSearchedAt      DateTime? // identity search done
-  finderCheckedAt    DateTime? // email-finder APIs asked
-  aiCheckedAt        DateTime?
-  enrichedAt         DateTime?
-  enrichAttempts     Int       @default(0)
-  enrichNotes        String?   @db.Text
-  firstSeenAt        DateTime  @default(now())
-  lastSeenAt         DateTime  @default(now())
-  createdAt          DateTime  @default(now())
-  updatedAt          DateTime  @updatedAt
+  consentSensitive    Boolean   @default(false) // EU/UK/CA/AU/NZ: stricter outreach rules
+  intentScore         Int       @default(0) // how likely they want to build/buy (0-100)
+  intentEvidence      String[]  @default([]) // "Runs an agency", "Commented on 3 videos" …
+  identityScore       Int       @default(0) // how sure we are who they are (0-100)
+  ownChannelSummary   String? // "14 videos, mostly about n8n / AI agents"
+  ownChannelAi        Boolean   @default(false) // their own uploads are about AI/automation
+  deepReadAt          DateTime? // own channel + uploads read via the API
+  webSearchedAt       DateTime? // identity search done
+  finderCheckedAt     DateTime? // email-finder APIs asked
+  aiCheckedAt         DateTime?
+  enrichedAt          DateTime?
+  enrichAttempts      Int       @default(0)
+  enrichNotes         String?   @db.Text
+  // Intelligence (PRD M3)
+  useCase             String? // AI_RECEPTIONIST | VOICE_AGENT | AI_SALES_AGENT | … | UNKNOWN
+  useCaseDetail       String?
+  forWhom             String? // SELF | CLIENTS | EMPLOYER | UNKNOWN
+  vertical            String?
+  buildStage          String? // EXPLORING | BUILDING | SHIPPED | SELLING
+  blocker             String?
+  useCaseSource       String? // RULES | AI | MANUAL
+  fitScore            Int       @default(0)
+  fitReasons          String[]  @default([])
+  reachability        Int       @default(0)
+  opportunityScore    Int       @default(0)
+  whyTriven           String?   @db.Text
+  outreachAngle       String?   @db.Text
+  aiCitations         Json?
+  discoveryStage      String    @default("COLLECTED")
+  inauthentic         Boolean   @default(false)
+  lastEngagedAt       DateTime?
+  // First-touch attribution (PRD R9.1)
+  firstSourcePlatform String?
+  firstContainerId    String?
+  firstContentId      String?
+  firstEngagementId   String?
+  // Manual warm touch for high-fit people with no email (PRD R4.6)
+  warmTouch           String? // TODO | TOUCHED | RESPONDED | SKIPPED
+  warmTouchedAt       DateTime?
+  firstSeenAt         DateTime  @default(now())
+  lastSeenAt          DateTime  @default(now())
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
 
   comments AudienceComment[]
   emails   ProspectEmail[]
+  evidence ProspectEvidence[]
   lead     Lead?
 
   @@index([relevance])
+  @@index([opportunityScore])
+  @@index([useCase])
+  @@index([discoveryStage])
   @@index([status])
   @@index([score])
   @@index([interestCategory])
@@ -578,20 +635,21 @@ model Prospect {
 
 // Several addresses per person; an address belongs to exactly one person
 model ProspectEmail {
-  id           String    @id @default(cuid())
-  prospectId   String
-  email        String    @unique
-  source       String // CHANNEL | CHANNEL_VIDEO | COMMENT | WEBSITE | LINK_PAGE | HUNTER | APOLLO | PATTERN | MANUAL
-  sourceUrl    String?
-  confidence   Int? // finder / verifier confidence 0-100
-  status       String    @default("UNKNOWN") // VERIFIED | RISKY | UNKNOWN | INVALID
-  verifyMethod String? // MX | ZEROBOUNCE | NEVERBOUNCE | MILLIONVERIFIER | REOON | BOUNCE
-  verifyDetail String?
-  isPrimary    Boolean   @default(false)
-  isRole       Boolean   @default(false)
-  isFree       Boolean   @default(false)
-  checkedAt    DateTime?
-  createdAt    DateTime  @default(now())
+  id                String    @id @default(cuid())
+  prospectId        String
+  email             String    @unique
+  source            String // CHANNEL | CHANNEL_VIDEO | COMMENT | WEBSITE | LINK_PAGE | HUNTER | APOLLO | PATTERN | MANUAL
+  sourceUrl         String?
+  confidence        Int? // finder / verifier confidence 0-100
+  status            String    @default("UNKNOWN") // VERIFIED | RISKY | UNKNOWN | INVALID
+  verifyMethod      String? // MX | ZEROBOUNCE | NEVERBOUNCE | MILLIONVERIFIER | REOON | BOUNCE
+  verifyDetail      String?
+  isPrimary         Boolean   @default(false)
+  isRole            Boolean   @default(false)
+  isFree            Boolean   @default(false)
+  confidenceReasons String[]  @default([])
+  checkedAt         DateTime?
+  createdAt         DateTime  @default(now())
 
   prospect Prospect @relation(fields: [prospectId], references: [id], onDelete: Cascade)
 
@@ -718,4 +776,97 @@ model BusinessEmail {
   @@index([email])
   @@index([status])
   @@map("business_emails")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PRD v2: reliability, intelligence, segments, attribution
+// ─────────────────────────────────────────────────────────────────────────────
+
+// One row per worker call: the heartbeat behind System Health
+model WorkerRun {
+  id         String   @id @default(cuid())
+  action     String // tick | audience | finder | nightly
+  source     String? // scheduler that called it (header / user agent)
+  startedAt  DateTime @default(now())
+  durationMs Int      @default(0)
+  ok         Boolean  @default(true)
+  summary    Json?
+  error      String?  @db.Text
+
+  @@index([action, startedAt])
+  @@map("worker_runs")
+}
+
+// Why we think what we think about a person: every score cites these
+model ProspectEvidence {
+  id         String    @id @default(cuid())
+  prospectId String
+  type       String // SELF_BUILDING | FOR_CLIENTS | OWNS_BUSINESS | ASKED_HOW_TO | NAMED_TOOL | NAMED_BLOCKER | REPEAT_ENGAGEMENT | OWN_AI_CONTENT | SITE_OFFERS_AI | JOB_TITLE | BUDGET_SIGNAL | NEGATIVE
+  weight     Int       @default(0)
+  text       String
+  sourceUrl  String?
+  sourceKind String // COMMENT | OWN_VIDEO | WEBSITE | PROFILE | SEARCH | FINDER | MANUAL
+  observedAt DateTime?
+  createdBy  String    @default("RULES") // RULES | AI | MANUAL
+  createdAt  DateTime  @default(now())
+
+  prospect Prospect @relation(fields: [prospectId], references: [id], onDelete: Cascade)
+
+  @@index([prospectId])
+  @@index([type])
+  @@map("prospect_evidence")
+}
+
+// Saved audience filter; can feed a campaign every day
+model AudienceSegment {
+  id         String    @id @default(cuid())
+  name       String
+  filters    Json
+  campaignId String?
+  autoFeed   Boolean   @default(false)
+  dailyCap   Int       @default(30)
+  lastRunAt  DateTime?
+  lastCount  Int       @default(0)
+  lastAdded  Int       @default(0)
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  @@map("audience_segments")
+}
+
+// Nightly aggregate per source (our own numbers; survive raw-data purges)
+model SourceSnapshot {
+  id          String   @id @default(cuid())
+  date        DateTime @db.Date
+  platform    String
+  containerId String // AudienceChannel.youtubeChannelId
+  contentId   String   @default("") // AudienceVideo.youtubeVideoId, "" = channel total
+  title       String?
+  comments    Int      @default(0)
+  flagged     Int      @default(0)
+  people      Int      @default(0)
+  qualified   Int      @default(0)
+  qra         Int      @default(0)
+  contacted   Int      @default(0)
+  replied     Int      @default(0)
+  positive    Int      @default(0)
+  meetings    Int      @default(0)
+  won         Int      @default(0)
+  revenue     Float    @default(0)
+
+  @@unique([date, containerId, contentId])
+  @@index([containerId])
+  @@map("source_snapshots")
+}
+
+// Never turn these into prospects (competitors, own staff, known engagement groups)
+model ExclusionEntry {
+  id        String   @id @default(cuid())
+  kind      String // CHANNEL | DOMAIN | EMAIL | NAME
+  value     String
+  reason    String?
+  createdAt DateTime @default(now())
+
+  @@unique([kind, value])
+  @@map("exclusions")
 }

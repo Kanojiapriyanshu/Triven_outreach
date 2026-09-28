@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { requireAuth } from '@/lib/auth'
 import prisma from '@/lib/prisma'
 import { z } from 'zod'
+import { getSettings } from '@/lib/settings'
 
 const patchSchema = z.object({
   name: z.string().trim().min(1).optional(),
@@ -21,6 +22,10 @@ const patchSchema = z.object({
   gapMinMinutes: z.number().int().min(1).max(240).nullish(),
   gapMaxMinutes: z.number().int().min(1).max(240).nullish(),
   sendingStatus: z.enum(['DRAFT', 'ACTIVE', 'PAUSED']).optional(),
+  autoPush: z.boolean().optional(),
+  recipientHours: z.boolean().optional(),
+  abTest: z.boolean().optional(),
+  launchChecked: z.boolean().optional(),
   isPaused: z.boolean().optional(),
   senderAccountIds: z.array(z.string()).optional(),
 })
@@ -50,7 +55,8 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   const { id } = await params
   const parsed = patchSchema.safeParse(await req.json())
   if (!parsed.success) return NextResponse.json({ error: parsed.error.errors[0]?.message || 'Invalid update' }, { status: 400 })
-  const { senderAccountIds, ...rest } = parsed.data
+  const { senderAccountIds, launchChecked, ...rest } = parsed.data
+  if (launchChecked) (rest as Record<string, unknown>).launchCheckedAt = new Date()
 
   // Launching: make sure it can actually send before switching it on
   if (rest.sendingStatus === 'ACTIVE') {
@@ -63,6 +69,16 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       where: { gmailStatus: 'CONNECTED', isActive: true, ...(chosen.length ? { id: { in: chosen } } : {}) },
     })
     if (!connected) return NextResponse.json({ error: 'None of this campaign\'s inboxes are connected to Gmail.' }, { status: 400 })
+    // Cold-email law: a postal address in every footer (Settings)
+    const { senderAddress } = await getSettings()
+    if (!senderAddress?.trim()) return NextResponse.json({ error: 'Add your postal address in Settings first: every cold email must include one (CAN-SPAM, CASL, Spam Act).', code: 'NO_ADDRESS' }, { status: 400 })
+    // Review 20 real emails before the first launch, and again after the templates change
+    const lastEdit = await prisma.emailTemplate.findFirst({ where: { campaignId: id }, orderBy: { updatedAt: 'desc' }, select: { updatedAt: true } })
+    const checkedAt = launchChecked ? new Date() : current.launchCheckedAt
+    if (!checkedAt || (lastEdit && lastEdit.updatedAt > checkedAt)) {
+      return NextResponse.json({ error: 'Review the sample emails before launching.', code: 'NEEDS_REVIEW' }, { status: 409 })
+    }
+    ;(rest as Record<string, unknown>).pausedReason = null
     if (!current.launchedAt) (rest as Record<string, unknown>).launchedAt = new Date()
   }
 

@@ -13,6 +13,8 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { RelevanceBadge, ProspectStatusBadge, EmailChip, Avatar, fmtNum } from './badges'
 import { PERSONAS, INTERESTS, COUNTRIES, sequenceForPersona, type Persona, type Interest } from '@/lib/audience/taxonomy'
 import { AI_BUILDER_SEQUENCES } from '@/lib/audience/sequences'
+import { USE_CASE_SEQUENCES, useCaseCampaignKey } from '@/lib/audience/usecase-sequences'
+import IntelligencePanel, { type Intel } from './IntelligencePanel'
 import { buildTemplateVars, renderTemplate } from '@/lib/template'
 import { fmtRelative } from '@/lib/utils'
 import { commentUrl, profileUrl, PLATFORM_LABEL } from '@/lib/audience/links'
@@ -24,14 +26,14 @@ const fetcher = (url: string) => fetch(url).then(async (r) => {
   return d
 })
 
-interface Detail {
+interface Detail extends Omit<Intel, 'id' | 'sendableEmailId' | 'identityScore' | 'intentScore'> {
   id: string; youtubeChannelId: string; displayName: string; firstName: string | null; lastName: string | null; handle: string | null
   avatarUrl: string | null; channelDescription: string | null; subscriberCount: number; videoCount: number; country: string | null
   company: string | null; jobTitle: string | null; website: string | null; linkedIn: string | null; twitter: string | null; github: string | null
   otherLinks: string[]; location: string | null; bio: string | null; persona: string | null; interestCategory: string | null
   relevance: string; score: number; reason: string | null; topic: string | null; icebreaker: string | null; status: string
   consentSensitive: boolean; enrichedAt: string | null; enrichNotes: string | null; aiCheckedAt: string | null; firstSeenAt: string
-  emails: Array<{ id: string; email: string; source: string; sourceUrl: string | null; status: string; verifyMethod: string | null; verifyDetail: string | null; isPrimary: boolean; isRole: boolean; isFree: boolean; confidence: number | null }>
+  emails: Array<{ id: string; email: string; source: string; sourceUrl: string | null; status: string; verifyMethod: string | null; verifyDetail: string | null; isPrimary: boolean; isRole: boolean; isFree: boolean; confidence: number | null; composite: number | null; reasons: string[] }>
   comments: Array<{ id: string; youtubeCommentId: string; text: string; relevance: string; score: number; signals: string[]; likeCount: number; publishedAt: string | null; video: { title: string; youtubeVideoId: string; platform: string; url?: string | null; channel: { title: string } } }>
   lead: { id: string; status: string; firstEmailSentAt: string | null; hasReplied: boolean; campaign: { id: string; name: string } | null } | null
   sendableEmailId: string | null
@@ -108,12 +110,13 @@ export default function ProspectDialog({ id, onClose, onChanged, onPush }: { id:
   // What their first email would look like
   const preview = useMemo(() => {
     if (!p || !('id' in p)) return null
-    const seq = AI_BUILDER_SEQUENCES.find((s) => s.id === sequenceForPersona(p.persona))!
+    const seq = (p.useCase ? USE_CASE_SEQUENCES.find((s) => s.id === useCaseCampaignKey(p)) : undefined) || AI_BUILDER_SEQUENCES.find((s) => s.id === sequenceForPersona(p.persona))!
     const best = p.comments[0]
     const lead = {
       firstName: p.firstName, lastName: p.lastName, companyName: p.company || '', companyEmail: p.emails.find((e) => e.id === p.sendableEmailId)?.email || null,
       industry: 'AI Builder', personalizationNotes: p.icebreaker, sourcePlatform: p.platform, sourceChannel: best?.video.channel.title, sourceVideo: best?.video.title,
-      commentTopic: p.topic, interestCategory: p.interestCategory, persona: p.persona,
+      commentTopic: p.useCaseSource === 'AI' && p.useCaseDetail ? p.useCaseDetail.toLowerCase() : p.topic, interestCategory: p.interestCategory, persona: p.persona,
+      useCase: p.useCase, companyPainPoint: p.useCaseSource !== 'RULES' ? p.blocker : null,
     }
     const vars = buildTemplateVars(lead, { displayName: me?.user?.name || 'You' })
     return { campaign: seq.niche, subject: renderTemplate(seq.steps[0].subject, vars), body: renderTemplate(seq.steps[0].body, vars) }
@@ -155,8 +158,9 @@ export default function ProspectDialog({ id, onClose, onChanged, onPush }: { id:
             </DialogHeader>
 
             <div className="grid gap-5 md:grid-cols-2">
-              {/* Left: classification + personalisation */}
+              {/* Left: intelligence, classification, personalisation */}
               <div className="space-y-4">
+                <IntelligencePanel p={p} onPatch={patch} />
                 <div className="grid grid-cols-2 gap-2">
                   <label className="text-xs text-slate-500">Persona
                     <select value={p.persona || ''} onChange={(e) => patch({ persona: e.target.value || null }, 'Persona updated')} className="mt-1 h-8 w-full rounded-lg border border-slate-300 px-2 text-sm text-slate-800">
@@ -254,7 +258,7 @@ export default function ProspectDialog({ id, onClose, onChanged, onPush }: { id:
                       <p className="text-[11px] text-slate-500 mt-1">
                         From {e.sourceUrl ? <a href={e.sourceUrl} target="_blank" rel="noreferrer" className="underline">{SOURCE_LABEL[e.source] || e.source}</a> : SOURCE_LABEL[e.source] || e.source}
                         {e.isRole && ' · shared inbox'}{e.isFree ? ' · personal mail' : ' · business domain'}
-                        {e.confidence ? ` · confidence ${e.confidence}` : ''}
+                        {e.composite != null ? <span title={e.reasons.join(', ')}> · confidence <strong>{e.composite}</strong></span> : e.confidence ? ` · confidence ${e.confidence}` : ''}
                         {e.verifyDetail && <> · {e.verifyDetail}</>}
                         {e.id === p.sendableEmailId && <span className="text-emerald-700 font-medium"> · will be used</span>}
                       </p>

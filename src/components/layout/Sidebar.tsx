@@ -18,6 +18,10 @@ import {
   Telescope,
   UserSearch,
   MapPinned,
+  Activity,
+  Layers,
+  BarChart3,
+  Kanban,
   type LucideIcon,
 } from 'lucide-react'
 import useSWR from 'swr'
@@ -42,6 +46,8 @@ const sections: Array<{ title: string; items: NavItem[] }> = [
       { label: 'Audience', href: '/audience', icon: Radar, exact: true },
       { label: 'Discover', href: '/audience/discover', icon: Telescope },
       { label: 'Prospects', href: '/audience/prospects', icon: UserSearch, badge: 'prospectsReady' },
+      { label: 'Segments', href: '/audience/segments', icon: Layers },
+      { label: 'Sources', href: '/audience/sources', icon: BarChart3 },
     ],
   },
   {
@@ -49,6 +55,7 @@ const sections: Array<{ title: string; items: NavItem[] }> = [
     items: [
       { label: 'Campaigns', href: '/campaigns', icon: Megaphone },
       { label: 'Leads', href: '/leads', icon: Users },
+      { label: 'Pipeline', href: '/pipeline', icon: Kanban },
       { label: 'Templates', href: '/templates', icon: FileText },
       { label: 'Import', href: '/imports', icon: Upload },
     ],
@@ -57,6 +64,7 @@ const sections: Array<{ title: string; items: NavItem[] }> = [
     title: 'Configuration',
     items: [
       { label: 'Sender accounts', href: '/sender-accounts', icon: Mail },
+      { label: 'System health', href: '/system', icon: Activity },
       { label: 'Settings', href: '/settings', icon: Settings },
     ],
   },

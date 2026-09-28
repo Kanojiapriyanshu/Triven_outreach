@@ -12,6 +12,8 @@ import { INTERESTS, AUDIENCE_CAMPAIGNS, type Interest } from './taxonomy'
 import { commentUrl, profileUrl, PLATFORM_LABEL } from './links'
 import { HN_CHANNEL_ID, HN_CHANNEL_TITLE, hnStoryUrl, type HnStory } from './hn'
 import { DEVTO_CHANNEL_ID, DEVTO_CHANNEL_TITLE, type DevArticle } from './devto'
+import { useCaseRoutes, routeFor } from './routing'
+import { loadExclusions, isExcluded } from './quality'
 
 export { AUDIENCE_CAMPAIGNS }
 
@@ -167,8 +169,11 @@ export interface PushResult { added: number; skipped: Array<{ id: string; name: 
 export async function pushToCampaign(prospectIds: string[], target: { campaignId?: string; byPersona?: boolean }, userId?: string): Promise<PushResult> {
   const settings = await getAudienceSettings()
   const out: PushResult = { added: 0, skipped: [], byCampaign: {} }
+  // byPersona = "route automatically": use-case campaign first, persona campaign as fallback
   const routing = target.byPersona ? await routeCampaigns() : null
-  if (!target.campaignId && !routing?.fallback && !Object.keys(routing?.route || {}).length) throw new Error('Create the AI Builder campaigns first (Audience → Campaigns), or pick a campaign')
+  const ucRoutes = target.byPersona ? await useCaseRoutes() : new Map<string, string>()
+  if (!target.campaignId && !ucRoutes.size && !routing?.fallback && !Object.keys(routing?.route || {}).length) throw new Error('Create the AI Builder campaigns first (Audience → Campaigns), or pick a campaign')
+  const excl = await loadExclusions()
 
   const prospects = await prisma.prospect.findMany({
     where: { id: { in: prospectIds } },
@@ -185,6 +190,7 @@ export async function pushToCampaign(prospectIds: string[], target: { campaignId
     const skip = (reason: string) => out.skipped.push({ id: p.id, name, reason })
     if (p.lead) { skip('already in a campaign'); continue }
     if (p.status === 'DO_NOT_CONTACT') { skip('do not contact'); continue }
+    if (p.inauthentic) { skip('suspected coordinated / paid engagement'); continue }
     const gap = readinessGap(p, settings)
     if (gap) { skip(gap); continue }
     const email = bestEmail(p.emails, p, settings)
@@ -198,8 +204,9 @@ export async function pushToCampaign(prospectIds: string[], target: { campaignId
     }
     const dupe = await prisma.lead.findFirst({ where: { companyEmail: email.email }, select: { id: true } })
     if (dupe) { skip('this email is already a lead'); continue }
+    if (isExcluded(excl, { channelId: p.youtubeChannelId, name: p.displayName, email: email.email, website: p.website })) { skip('on the exclusion list'); continue }
 
-    const campaignId = target.campaignId || (p.persona && routing?.route[p.persona]) || routing?.fallback
+    const campaignId = target.campaignId || routeFor(p, ucRoutes, routing)
     if (!campaignId) { skip('no campaign for this persona'); continue }
 
     const best = p.comments[0]
@@ -229,16 +236,21 @@ export async function pushToCampaign(prospectIds: string[], target: { campaignId
         personalizationNotes: p.icebreaker,
         researchSummary: p.channelDescription?.slice(0, 2000) || p.bio,
         socialMediaNotes: [profileUrl(p), p.twitter, p.github && `https://github.com/${p.github}`, ...p.otherLinks.slice(0, 5)].filter(Boolean).join('\n'),
-        prospectingNotes: `Intent ${p.intentScore}/100 · identity ${p.identityScore}/100 · email from ${email.source.toLowerCase().replace('_', ' ')}, ${email.status.toLowerCase()}${email.verifyMethod ? ` (${email.verifyMethod.toLowerCase()})` : ''}${email.confidence ? `, confidence ${email.confidence}` : ''}`,
+        prospectingNotes: `${p.whyTriven ? `Why Triven: ${p.whyTriven}\n${p.outreachAngle ? `Angle: ${p.outreachAngle}\n` : ''}` : ''}Opportunity ${p.opportunityScore} · fit ${p.fitScore}/100 · intent ${p.intentScore}/100 · identity ${p.identityScore}/100 · email from ${email.source.toLowerCase().replace('_', ' ')}, ${email.status.toLowerCase()}${email.verifyMethod ? ` (${email.verifyMethod.toLowerCase()})` : ''}${email.confidence ? `, confidence ${email.confidence}` : ''}`,
         prospectId: p.id,
         sourcePlatform: p.platform,
         sourceChannel: best?.video.channel.title,
         sourceVideo: best?.video.title,
         sourceVideoUrl: videoUrl,
         sourceComment: best?.text.slice(0, 2000),
-        commentTopic: p.topic,
+        commentTopic: p.useCaseSource === 'AI' && p.useCaseDetail ? p.useCaseDetail.toLowerCase() : p.topic,
         interestCategory: p.interestCategory,
         persona: p.persona,
+        useCase: p.useCase,
+        // Their blocker opens the email ({{blockerLine}}) only when the AI or a person confirmed it
+        companyPainPoint: p.useCaseSource !== 'RULES' ? p.blocker : null,
+        firstContainerId: p.firstContainerId,
+        firstContentId: p.firstContentId,
       },
     })
     await prisma.activity.create({

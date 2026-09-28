@@ -3,6 +3,7 @@
 import type { Lead } from '@prisma/client'
 import type { gmail_v1 } from 'googleapis'
 import prisma from './prisma'
+import { triageLeadReply, bounceGuard } from './reply-triage'
 import { getGmailClientForAccount } from './gmail'
 import { STOP_FOLLOWUP_STATUSES } from './utils'
 
@@ -148,6 +149,7 @@ export async function recordInbound(lead: Lead, verdict: ThreadVerdict, senderEm
     await prisma.activity.create({
       data: { leadId: lead.id, type: 'OTHER', title: 'Email bounced — follow-ups stopped', body: verdict.snippet },
     })
+    await bounceGuard(senderEmail)
     return true
   }
 
@@ -169,8 +171,11 @@ export async function recordInbound(lead: Lead, verdict: ThreadVerdict, senderEm
       title: `${lead.fullName || lead.companyName} replied`,
       body: verdict.snippet,
       leadId: lead.id,
+      metadata: { href: `/inbox?lead=${lead.id}` },
     },
   })
+  // Category, status, unsubscribe handling and a suggested answer
+  await triageLeadReply(lead.id, verdict.body || verdict.snippet || '')
   return true
 }
 
@@ -338,8 +343,9 @@ export async function syncConversations(gmail: gmail_v1.Gmail, senderEmail: stri
       if (!ours && !isAutoReply(msg)) {
         await prisma.lead.update({ where: { id: t.leadId }, data: { lastResponseAt: at } })
         await prisma.notification.create({
-          data: { type: 'REPLY', title: 'New reply in a conversation', body: body.slice(0, 200), leadId: t.leadId },
+          data: { type: 'REPLY', title: 'New reply in a conversation', body: body.slice(0, 200), leadId: t.leadId, metadata: { href: `/inbox?lead=${t.leadId}` } },
         })
+        await triageLeadReply(t.leadId, body)
       }
     }
   }

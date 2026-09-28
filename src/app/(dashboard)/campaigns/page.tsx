@@ -3,7 +3,8 @@ import { useState } from 'react'
 import Link from 'next/link'
 import useSWR from 'swr'
 import { toast } from 'sonner'
-import { Plus, Megaphone, Trash2, Pause, Play, Rocket, Settings2, Upload, Inbox, Clock } from 'lucide-react'
+import { Plus, Megaphone, Trash2, Pause, Play, Rocket, Settings2, Upload, Inbox, Clock, Sparkles } from 'lucide-react'
+import LaunchReviewDialog from '@/components/campaigns/LaunchReviewDialog'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -28,7 +29,11 @@ interface Campaign {
   _count: { leads: number; templates: number }
   senderAccounts: Array<{ senderAccount: { id: string; displayName: string; email: string; gmailStatus: string } }>
   stats: Stats
+  useCase?: string | null; autoPush: boolean; recipientHours: boolean; abTest: boolean; pausedReason?: string | null
+  capacity: { state: 'SENDING' | 'IDLE' | 'BLOCKED' | 'OFF'; reason: string; capacityToday: number } | null
 }
+
+const CAP_DOT: Record<string, string> = { SENDING: 'bg-emerald-500', IDLE: 'bg-slate-300', BLOCKED: 'bg-red-500', OFF: 'bg-slate-300' }
 interface Sender { id: string; displayName: string; email: string; gmailStatus: string }
 
 const STATUS = {
@@ -41,6 +46,7 @@ const EMPTY = {
   name: '', industry: '', dailyNewLeads: 30, followUpDay1: 3, followUpDay2: 7, followUpDay3: 14, senderAccountIds: [] as string[],
   // Schedule ('' = use Settings)
   windowStart: '', windowEnd: '', sendDays: [1, 2, 3, 4, 5] as number[], gapMinMinutes: 3, gapMaxMinutes: 5,
+  autoPush: false, recipientHours: false, abTest: false,
 }
 
 function pct(n: number, d: number) {
@@ -59,6 +65,7 @@ export default function CampaignsPage() {
   const [saving, setSaving] = useState(false)
   const [busy, setBusy] = useState<string | null>(null)
   const [form, setForm] = useState(EMPTY)
+  const [reviewing, setReviewing] = useState<Campaign | null>(null)
 
   function openNew() {
     setEditing(null)
@@ -75,6 +82,7 @@ export default function CampaignsPage() {
       windowStart: c.windowStart ?? '', windowEnd: c.windowEnd ?? '',
       sendDays: parseDays(c.sendDays) ?? [1, 2, 3, 4, 5],
       gapMinMinutes: c.gapMinMinutes ?? 3, gapMaxMinutes: c.gapMaxMinutes ?? 5,
+      autoPush: c.autoPush, recipientHours: c.recipientHours, abTest: c.abTest,
     })
     setShowForm(true)
   }
@@ -119,12 +127,22 @@ export default function CampaignsPage() {
         body: JSON.stringify({ sendingStatus }),
       })
       const d = await res.json().catch(() => ({}))
+      // First launch (or edited templates): read the real emails first
+      if (res.status === 409 && d.code === 'NEEDS_REVIEW') { setReviewing(c); return }
       if (!res.ok) return toast.error(d.error || 'Could not update')
       toast.success(sendingStatus === 'ACTIVE'
         ? `${c.name} is live. Emails start in the next send window.`
         : `${c.name} paused. Nothing more goes out until you resume.`)
       mutate()
     } finally { setBusy(null) }
+  }
+
+  async function createUseCase() {
+    const res = await fetch('/api/audience/usecase-campaigns', { method: 'POST' })
+    const d = await res.json().catch(() => ({}))
+    if (!res.ok) return toast.error(d.error || 'Could not create')
+    toast.success(d.created ? `${d.created} use-case campaigns created as drafts. Review and launch the ones you want.` : 'All use-case campaigns already exist')
+    mutate()
   }
 
   async function remove(c: Campaign) {
@@ -152,7 +170,10 @@ export default function CampaignsPage() {
             on each campaign&apos;s own schedule.
           </p>
         </div>
-        <Button size="sm" onClick={openNew}><Plus className="h-4 w-4" />New Campaign</Button>
+        <div className="flex gap-2">
+          <Button size="sm" variant="outline" onClick={createUseCase} title="Eight AI Builder campaigns, one per thing people want to build"><Sparkles className="h-4 w-4" />Use-case campaigns</Button>
+          <Button size="sm" onClick={openNew}><Plus className="h-4 w-4" />New Campaign</Button>
+        </div>
       </div>
 
       {data && campaigns.length === 0 && (
@@ -194,6 +215,12 @@ export default function CampaignsPage() {
                       follow-ups on day {c.followUpDay1}, {c.followUpDay2}, {c.followUpDay3}
                       {c.sendingStatus === 'ACTIVE' && s.queued > 0 && <> · queue done in ~{daysLeft} working day{daysLeft === 1 ? '' : 's'}</>}
                     </p>
+                    {c.capacity && (
+                      <p className="mt-1.5 flex items-center gap-1.5 text-xs text-slate-600">
+                        <span className={`h-2 w-2 rounded-full ${CAP_DOT[c.capacity.state]}`} />{c.capacity.reason}
+                        {(c.autoPush || c.recipientHours || c.abTest) && <span className="text-slate-400"> · {[c.autoPush && 'auto-adds ready people', c.recipientHours && "recipients' business hours", c.abTest && 'A/B test'].filter(Boolean).join(' · ')}</span>}
+                      </p>
+                    )}
                   </div>
                   <div className="flex items-center gap-1.5">
                     {c.sendingStatus === 'ACTIVE' ? (
@@ -201,7 +228,7 @@ export default function CampaignsPage() {
                         <Pause className="h-3.5 w-3.5" />Pause
                       </Button>
                     ) : (
-                      <Button size="sm" loading={busy === c.id} onClick={() => setStatus(c, 'ACTIVE')} disabled={s.queued === 0 && s.followUpsPending === 0}>
+                      <Button size="sm" loading={busy === c.id} onClick={() => (c.sendingStatus === 'DRAFT' ? setReviewing(c) : setStatus(c, 'ACTIVE'))} disabled={s.queued === 0 && s.followUpsPending === 0 && !c.useCase}>
                         {c.sendingStatus === 'PAUSED' ? <><Play className="h-3.5 w-3.5" />Resume</> : <><Rocket className="h-3.5 w-3.5" />Launch</>}
                       </Button>
                     )}
@@ -314,6 +341,18 @@ export default function CampaignsPage() {
                 About <strong>{emailsPerWindow(formSchedule, formInboxes, { min: global.minGapMinutes, max: global.maxGapMinutes })}</strong> emails fit in each window with {formInboxes} inbox{formInboxes === 1 ? '' : 'es'}.
               </p>
             </div>
+            <div className="rounded-xl border border-slate-200 p-3 space-y-2">
+              {([
+                ['autoPush', 'Add ready people automatically', 'Ready prospects and businesses routed to this campaign are added every few minutes (only while it is sending).'],
+                ['recipientHours', "Send in each recipient's business hours", 'First emails and follow-ups go out 9:00–17:00 on weekdays in the recipient\'s own timezone (country / state). Best for worldwide audiences.'],
+                ['abTest', 'A/B test the first email', 'Half the leads get a "variant B" first email (create it on the Templates page); compare reply rates in Analytics.'],
+              ] as const).map(([k, label, hint]) => (
+                <label key={k} className="flex items-start gap-2.5">
+                  <input type="checkbox" className="mt-1" checked={form[k]} onChange={(e) => setForm((f) => ({ ...f, [k]: e.target.checked }))} />
+                  <span><span className="block text-sm font-medium text-slate-800">{label}</span><span className="block text-xs text-slate-500">{hint}</span></span>
+                </label>
+              ))}
+            </div>
             <div>
               <Label>Inboxes to rotate</Label>
               <div className="mt-1 flex flex-wrap gap-2">
@@ -339,6 +378,7 @@ export default function CampaignsPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      <LaunchReviewDialog campaign={reviewing} onClose={() => setReviewing(null)} onLaunched={() => mutate()} />
     </div>
   )
 }

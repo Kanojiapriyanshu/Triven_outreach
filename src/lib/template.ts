@@ -76,7 +76,11 @@ export function nameFromEmail(email?: string | null): { firstName?: string; doct
   return {}
 }
 
-export interface TemplateExtras { demoPhone?: string; builderUrl?: string; senderAddress?: string }
+export interface TemplateExtras {
+  demoPhone?: string; builderUrl?: string; senderAddress?: string
+  /** Ready-made template link per use case (capability sheet); empty = offer to send it */
+  templateLinks?: Record<string, string>
+}
 
 export function buildTemplateVars(lead: TemplateLead, sender?: TemplateSender | null, extras: TemplateExtras = {}): Record<string, string> {
   const nameParts = (lead.fullName || '').trim().split(/\s+/).filter(Boolean)
@@ -105,7 +109,17 @@ export function buildTemplateVars(lead: TemplateLead, sender?: TemplateSender | 
     senderAddress:   extras.senderAddress?.trim() || '',
     // People found through YouTube: talk about their comment, greet them as a person
     ...(lead.sourceVideo || lead.sourceChannel ? audienceOverrides(lead, firstName) : audienceVars({}, firstName)),
+    templateOffer: templateOffer(lead, extras),
   }
+}
+
+/** "Here's a ready-made AI receptionist template…" — linked when the team published one (capability sheet) */
+function templateOffer(lead: TemplateLead, extras: TemplateExtras) {
+  const v = audienceVars(lead, '')
+  const link = lead.useCase ? extras.templateLinks?.[lead.useCase] : ''
+  return link
+    ? `{I put together|There's} a ready-made ${v.useCaseLabel} template you can open and adapt: ${link}`
+    : `{I can send you|I have} a ready-made ${v.useCaseLabel} template you can {start from|adapt to what you're building}.`
 }
 
 function audienceOverrides(lead: TemplateLead, firstName: string) {

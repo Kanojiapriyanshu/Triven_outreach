@@ -23,7 +23,7 @@ const fetcher = (url: string) => fetch(url).then((r) => r.json())
 
 interface Template {
   id: string; name: string; subject: string; body: string; type: string
-  campaignId?: string | null; isDefault: boolean; createdAt: string
+  campaignId?: string | null; isDefault: boolean; createdAt: string; variant?: string | null
   campaign?: { id: string; name: string } | null
 }
 interface Campaign { id: string; name: string; industry: string }
@@ -54,7 +54,7 @@ export default function TemplatesPage() {
 
   // Editor
   const [editing, setEditing] = useState<Template | null>(null)
-  const [form, setForm] = useState({ name: '', subject: '', body: '', type: 'FIRST_EMAIL', isDefault: true })
+  const [form, setForm] = useState({ name: '', subject: '', body: '', type: 'FIRST_EMAIL', isDefault: true, variant: null as string | null })
   const [showForm, setShowForm] = useState(false)
   const [saving, setSaving] = useState(false)
   const [preview, setPreview] = useState(false)
@@ -68,14 +68,14 @@ export default function TemplatesPage() {
 
   function openNew(type: string) {
     setEditing(null)
-    setForm({ name: '', subject: '', body: '', type, isDefault: !inNiche.some((t) => t.type === type) })
+    setForm({ name: '', subject: '', body: '', type, isDefault: !inNiche.some((t) => t.type === type), variant: null })
     setPreview(false)
     setShowForm(true)
   }
 
   function openEdit(t: Template) {
     setEditing(t)
-    setForm({ name: t.name, subject: t.subject, body: t.body, type: t.type, isDefault: t.isDefault })
+    setForm({ name: t.name, subject: t.subject, body: t.body, type: t.type, isDefault: t.isDefault, variant: t.variant || null })
     setPreview(false)
     setShowForm(true)
   }
@@ -245,6 +245,7 @@ export default function TemplatesPage() {
                           <div className="flex items-center gap-2 flex-wrap min-w-0">
                             <p className="text-sm font-semibold text-slate-800 truncate">{t.name}</p>
                             {t.isDefault && <Badge className="text-xs"><Star className="h-3 w-3 mr-0.5 fill-current" />Default</Badge>}
+                            {t.variant === 'B' && <Badge variant="secondary" className="text-xs">Variant B</Badge>}
                           </div>
                           <div className="flex gap-0.5 shrink-0">
                             {!t.isDefault && (
@@ -350,6 +351,17 @@ export default function TemplatesPage() {
               />
               Default {STEP_LABEL[form.type].toLowerCase()} for this niche
             </label>
+            {form.type === 'FIRST_EMAIL' && (
+              <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={form.variant === 'B'}
+                  onChange={(e) => setForm((f) => ({ ...f, variant: e.target.checked ? 'B' : null, isDefault: e.target.checked ? false : f.isDefault }))}
+                  className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                />
+                A/B variant B (half of the leads get this one when the campaign's A/B test is on)
+              </label>
+            )}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowForm(false)}>Cancel</Button>

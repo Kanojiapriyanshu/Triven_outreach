@@ -47,6 +47,13 @@ export async function audienceOverview() {
     prisma.prospect.groupBy({ by: ['country'], where: { relevance: { in: ['HIGH', 'MEDIUM'] } }, _count: true, orderBy: { _count: { country: 'desc' } }, take: 15 }),
     prisma.prospect.groupBy({ by: ['platform'], where: { relevance: { in: ['HIGH', 'MEDIUM'] } }, _count: true }),
   ])
+  // Discovery funnel (PRD R4.1) and the operating metric: qualified reachable audience
+  const [stages, byUseCase, qra, inauthentic] = await Promise.all([
+    prisma.prospect.groupBy({ by: ['discoveryStage'], where: { relevance: { in: ['HIGH', 'MEDIUM'] } }, _count: true }),
+    prisma.prospect.groupBy({ by: ['useCase'], where: { relevance: { in: ['HIGH', 'MEDIUM'] } }, _count: true }),
+    prisma.prospect.count({ where: { intentScore: { gte: 60 }, fitScore: { gte: 60 }, reachability: { gte: 80 }, inauthentic: false } }),
+    prisma.prospect.count({ where: { inauthentic: true } }),
+  ])
 
   // Source performance: which channels' audiences actually turn into conversations
   const sources = await prisma.$queryRaw<Array<Record<string, unknown>>>`
@@ -86,6 +93,9 @@ export async function audienceOverview() {
     quota,
     backlog,
     funnel: { comments, prospects, relevant, high, enriched, withEmail, verified, ready, inCampaign, contacted, followUps, replied, interested, meetings, won },
+    stages: Object.fromEntries(stages.map((s) => [s.discoveryStage, s._count])),
+    byUseCase: byUseCase.map((r) => ({ key: r.useCase || 'UNKNOWN', count: r._count })).sort((a, b) => b.count - a.count),
+    qra, inauthentic,
     quality: {
       relevantPct: pct(relevant, prospects),
       profilePct: pct(profiles, enriched),

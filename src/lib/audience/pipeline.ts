@@ -25,6 +25,10 @@ import { emailTraits, verifierProvider, verifyEmail, FREE_MAIL } from './verify'
 import { aiConfigured, reviewProspects, describeAiError } from './ai'
 import { CONSENT_SENSITIVE, regionOf } from './taxonomy'
 import { getAudienceSettings, type AudienceSettings } from './settings'
+import { autoQueue, fastLane, scanTracked } from './refill'
+import { recomputeIntelligence, getCapabilities } from './intelligence'
+import { loadExclusions, isExcluded, detectCoordination } from './quality'
+import { autoPushReady } from './routing'
 
 const left = (deadline: number) => deadline - Date.now()
 
@@ -38,7 +42,8 @@ export async function collectComments(deadline: number): Promise<CollectResult> 
   const videos = await prisma.audienceVideo.findMany({
     where: { status: { in: ['QUEUED', 'COLLECTING'] }, platform: { in: platforms } },
     include: { channel: { select: { youtubeChannelId: true } } },
-    orderBy: [{ status: 'asc' }, { score: 'desc' }], // COLLECTING first, then best-fit
+    // Fresh fast-lane uploads first (recent comments convert best), then COLLECTING, then best-fit
+    orderBy: [{ fastLaneUntil: { sort: 'desc', nulls: 'last' } }, { status: 'asc' }, { score: 'desc' }],
     take: 10,
   })
 
@@ -196,7 +201,9 @@ async function ingestComments(video: IngestVideo, comments: IngestComment[]) {
   if (!comments.length) return { inserted: 0, newProspects: 0 }
   const known = await prisma.audienceComment.findMany({ where: { youtubeCommentId: { in: comments.map((c) => c.externalId) } }, select: { youtubeCommentId: true } })
   const seen = new Set(known.map((k) => k.youtubeCommentId))
-  const fresh = comments.filter((c) => !seen.has(c.externalId))
+  // Competitors, own staff and known engagement groups are never collected
+  const excl = await loadExclusions()
+  const fresh = comments.filter((c) => !seen.has(c.externalId) && !isExcluded(excl, { channelId: c.authorExternalId, name: c.authorName }))
   if (!fresh.length) return { inserted: 0, newProspects: 0 }
 
   // Prospects: one per author, however many comments they left
@@ -259,7 +266,7 @@ export async function refreshProspects(ids: string[]) {
   const [prospects, comments] = await Promise.all([
     prisma.prospect.findMany({ where: { id: { in: ids } } }),
     prisma.audienceComment.findMany({
-      where: { prospectId: { in: ids } },
+      where: { prospectId: { in: ids }, flaggedInauthentic: false },
       select: { id: true, prospectId: true, score: true, relevance: true, persona: true, interestCategory: true, topic: true, signals: true, text: true, video: { select: { title: true, channel: { select: { title: true } } } } },
       orderBy: { score: 'desc' },
     }),
@@ -324,6 +331,9 @@ export async function refreshProspects(ids: string[]) {
   }).filter(Boolean) as Prisma.PrismaPromise<Prospect>[]
 
   for (let i = 0; i < updates.length; i += 25) await prisma.$transaction(updates.slice(i, i + 25))
+  // Evidence, use case, fit, opportunity for the people whose comments changed (relevant ones only: cheap)
+  const relevant = (await prisma.prospect.findMany({ where: { id: { in: ids }, relevance: { in: ['HIGH', 'MEDIUM'] } }, select: { id: true } })).map((p) => p.id)
+  await recomputeIntelligence(relevant)
 }
 
 // ─── 2. AI review ────────────────────────────────────────────────────────────
@@ -331,24 +341,28 @@ export async function refreshProspects(ids: string[]) {
 export async function aiReview(deadline: number, settings: AudienceSettings) {
   const out = { reviewed: 0, error: '' }
   if (!aiConfigured() || !settings.useAi) return out
+  const caps = await getCapabilities()
   while (left(deadline) > 25_000) {
     const batch = await prisma.prospect.findMany({
-      where: { aiCheckedAt: null, relevance: { not: 'SPAM' }, score: { gte: 25 }, status: { not: 'DO_NOT_CONTACT' } },
+      where: { aiCheckedAt: null, relevance: { not: 'SPAM' }, score: { gte: 25 }, inauthentic: false, status: { not: 'DO_NOT_CONTACT' } },
       orderBy: { score: 'desc' },
       take: 15,
       select: {
-        id: true, displayName: true, channelDescription: true, intentEvidence: true, ownChannelSummary: true,
-        comments: { orderBy: { score: 'desc' }, take: 4, select: { text: true, video: { select: { title: true } } } },
+        id: true, displayName: true, channelDescription: true, ownChannelSummary: true,
+        comments: { where: { flaggedInauthentic: false }, orderBy: { score: 'desc' }, take: 4, select: { text: true, video: { select: { title: true, channel: { select: { title: true } } } } } },
+        evidence: { orderBy: { weight: 'desc' }, take: 12, select: { text: true, sourceUrl: true } },
       },
     })
     if (!batch.length) break
+    const refs = new Map(batch.map((p) => [p.id, p.evidence.map((e, i) => ({ ref: `E${i + 1}`, text: e.text, url: e.sourceUrl }))]))
     let results
     try {
       results = await reviewProspects(batch.map((p) => ({
         id: p.id, name: p.displayName,
-        bio: [p.channelDescription, p.ownChannelSummary && `Their channel: ${p.ownChannelSummary}`, p.intentEvidence.length && `Signals: ${p.intentEvidence.join('; ')}`].filter(Boolean).join('\n'),
-        comments: p.comments.map((c) => ({ video: c.video.title, text: c.text })),
-      })))
+        bio: [p.channelDescription, p.ownChannelSummary && `Their channel: ${p.ownChannelSummary}`].filter(Boolean).join('\n'),
+        comments: p.comments.map((c) => ({ video: `${c.video.channel.title}: ${c.video.title}`, text: c.text })),
+        evidence: refs.get(p.id)!,
+      })), caps)
     } catch (err) {
       out.error = describeAiError(err)
       break
@@ -359,6 +373,7 @@ export async function aiReview(deadline: number, settings: AudienceSettings) {
       const r = byId.get(p.id)
       // A person the AI skipped still gets stamped so we don't pay for them twice
       if (!r) return prisma.prospect.update({ where: { id: p.id }, data: { aiCheckedAt: now } })
+      const cited = refs.get(p.id)!.filter((e) => r.citations.includes(e.ref))
       return prisma.prospect.update({
         where: { id: p.id },
         data: {
@@ -369,9 +384,22 @@ export async function aiReview(deadline: number, settings: AudienceSettings) {
           topic: r.topic.trim().replace(/[.]+$/, '') || null,
           icebreaker: r.icebreaker.trim() || null,
           reason: `AI: ${r.reason}`,
+          useCase: r.use_case,
+          useCaseDetail: r.use_case_detail.trim() || null,
+          forWhom: r.for_whom,
+          vertical: r.vertical.trim() || null,
+          buildStage: r.build_stage,
+          blocker: r.blocker.trim() || null,
+          useCaseSource: 'AI',
+          // An uncited "why" was already dropped; then the rules version is rebuilt on recompute
+          whyTriven: r.why_triven || null,
+          outreachAngle: r.outreach_angle || null,
+          aiCitations: cited.length ? cited as unknown as Prisma.InputJsonValue : undefined,
         },
       })
     }))
+    // Fit and opportunity depend on the new use case
+    await recomputeIntelligence(batch.filter((p) => byId.has(p.id)).map((p) => p.id), { settings, caps })
     out.reviewed += batch.length
   }
   return out
@@ -848,7 +876,8 @@ export function bestEmail<T extends Pick<ProspectEmail, 'status' | 'source' | 'v
 }
 
 /** Why someone isn't ready yet (shown in the UI), or null when they are */
-export function readinessGap(p: SendableProspect & { identityScore: number; emails: Array<Parameters<typeof isSendable>[0] & { source: string }> }, s: AudienceSettings) {
+export function readinessGap(p: SendableProspect & { identityScore: number; inauthentic?: boolean; emails: Array<Parameters<typeof isSendable>[0] & { source: string }> }, s: AudienceSettings) {
+  if (p.inauthentic) return 'Suspected coordinated / paid engagement'
   const minRank = RANK[s.outreachFrom]
   if (RANK[p.relevance] < minRank) return `Intent is ${p.relevance.toLowerCase()}; outreach starts at ${s.outreachFrom.toLowerCase()}`
   const manual = p.emails.some((e) => e.source === 'MANUAL')
@@ -865,6 +894,7 @@ export function readinessGap(p: SendableProspect & { identityScore: number; emai
 
 /** Stable key for a readiness gap, for the "what's blocking outreach" breakdown */
 export function gapCode(gap: string) {
+  if (gap.startsWith('Suspected')) return 'INAUTHENTIC'
   if (gap.startsWith('Intent')) return 'INTENT'
   if (gap.startsWith('Identity')) return 'IDENTITY'
   if (gap.startsWith('No email found')) return 'NO_EMAIL'
@@ -917,7 +947,7 @@ export async function readinessBreakdown() {
   const s = await getAudienceSettings()
   const people = await prisma.prospect.findMany({
     where: { relevance: { in: ['HIGH', 'MEDIUM'] }, status: { notIn: ['DO_NOT_CONTACT', 'IN_CAMPAIGN'] } },
-    select: { relevance: true, identityScore: true, consentSensitive: true, country: true, enrichedAt: true, emails: { select: { status: true, source: true, verifyMethod: true, isFree: true } } },
+    select: { relevance: true, identityScore: true, inauthentic: true, consentSensitive: true, country: true, enrichedAt: true, emails: { select: { status: true, source: true, verifyMethod: true, isFree: true } } },
     take: 5000,
   })
   const counts: Record<string, number> = {}
@@ -953,6 +983,7 @@ export async function updateStatus(prospectId: string, settings?: AudienceSettin
   else status = p.website || p.linkedIn || p.company ? 'PROFILE_FOUND' : 'NO_CONTACT'
 
   if (status !== p.status) await prisma.prospect.update({ where: { id: p.id }, data: { status } })
+  if (p.relevance === 'HIGH' || p.relevance === 'MEDIUM') await recomputeIntelligence([p.id], { settings: s, isReady: () => status === 'READY_TO_CONTACT' || status === 'IN_CAMPAIGN' })
   return status
 }
 
@@ -996,6 +1027,12 @@ export async function runAudiencePipeline(deadline: number, only?: PipelineStep)
   if (!only) {
     const rescored = await rescoreLegacy(share(0.15))
     if (rescored) result.rescored = rescored
+    // Keep sources flowing without anyone clicking "Collect"
+    result.refill = {
+      fastLane: await fastLane(),
+      scanned: await scanTracked(share(0.1)),
+      queued: await autoQueue(),
+    }
   }
   if (!only || only === 'collect') result.collect = await collectComments(only ? deadline : share(0.35))
   if (!only || only === 'review') result.review = await aiReview(only ? deadline : share(0.3), settings)
@@ -1005,6 +1042,11 @@ export async function runAudiencePipeline(deadline: number, only?: PipelineStep)
   if (!only || only === 'verify') {
     result.verify = await verifyPending(Math.min(deadline, Date.now() + (deadline - Date.now()) * 0.7))
     result.smartVerify = await smartVerify(deadline, settings)
+  }
+  if (!only) {
+    result.intelligence = await backfillIntelligence(deadline)
+    // Campaigns that opted in receive their ready people automatically
+    result.autoPush = await autoPushReady().catch((e) => ({ error: (e as Error).message }))
   }
 
   if (!only) {
@@ -1016,6 +1058,30 @@ export async function runAudiencePipeline(deadline: number, only?: PipelineStep)
     }
   }
   return result
+}
+
+/** People collected before intelligence existed (or whose rules changed) get evidence, use case, fit */
+export async function backfillIntelligence(deadline: number) {
+  let done = 0
+  while (left(deadline) > 6_000) {
+    const batch = await prisma.prospect.findMany({
+      where: { relevance: { in: ['HIGH', 'MEDIUM'] }, useCase: null },
+      orderBy: { intentScore: 'desc' }, take: 40, select: { id: true },
+    })
+    if (!batch.length) break
+    done += await recomputeIntelligence(batch.map((b) => b.id))
+  }
+  return done
+}
+
+/** Daily: flag coordinated engagement, then refresh the people it touched */
+export async function qualityPass() {
+  const q = await detectCoordination(30)
+  if (q.people) {
+    const touched = (await prisma.prospect.findMany({ where: { inauthentic: true, status: { notIn: ['DO_NOT_CONTACT', 'IN_CAMPAIGN'] } }, select: { id: true } })).map((p) => p.id)
+    for (const id of touched) await updateStatus(id)
+  }
+  return q
 }
 
 /** Is there anything left for the pipeline to do? (drives the "Run" button loop) */
