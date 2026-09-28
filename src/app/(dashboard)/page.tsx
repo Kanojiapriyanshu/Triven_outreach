@@ -11,6 +11,7 @@ import type { DashboardStats } from '@/types'
 import PageHeader from '@/components/layout/PageHeader'
 import { Button } from '@/components/ui/button'
 import Link from 'next/link'
+import CommandCenter from '@/components/dashboard/CommandCenter'
 
 const fetcher = (url: string) => fetch(url).then((r) => r.json())
 
@@ -68,12 +69,14 @@ export default function DashboardPage() {
       <PageHeader
         section={new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}
         title="Dashboard"
-        description="Today's pipeline, replies and inbox health at a glance."
+        description="What needs you now, how the pipeline is converting, and today's numbers."
         actions={<>
-          <Button size="sm" variant="outline" asChild><Link href="/audience">Audience</Link></Button>
-          <Button size="sm" asChild><Link href="/campaigns">Campaigns</Link></Button>
+          <Button size="sm" variant="outline" asChild><Link href="/campaigns">Campaigns</Link></Button>
+          <Button size="sm" asChild><Link href="/finder">Find leads</Link></Button>
         </>}
       />
+
+      <CommandCenter />
 
       {/* Today's metrics */}
       <div>

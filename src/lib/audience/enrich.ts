@@ -23,7 +23,8 @@ export interface Findings {
   notes: string[]
 }
 
-const UA = 'Mozilla/5.0 (compatible; TrivenResearch/1.0; public contact lookup)'
+// A plain, honest bot name: firewalls block "Mozilla/5.0 (compatible; …)" look-alikes far more often
+const UA = 'TrivenBot/1.0 (public business contact lookup)'
 const LINK_PAGES = /(^|\.)(linktr\.ee|beacons\.ai|bio\.link|linkin\.bio|lnk\.bio|campsite\.bio|hoo\.be|taplink\.cc|stan\.store|solo\.to|carrd\.co|withkoji\.com|bento\.me|msha\.ke|tap\.bio|flow\.page|link\.me)$/i
 const NEVER_CRAWL = /(^|\.)(youtube\.com|youtu\.be|instagram\.com|facebook\.com|fb\.com|tiktok\.com|x\.com|twitter\.com|linkedin\.com|github\.com|discord\.gg|discord\.com|t\.me|telegram\.me|patreon\.com|calendly\.com|cal\.com|skool\.com|whop\.com|amazon\.[a-z.]+|amzn\.to|bit\.ly|tinyurl\.com|geni\.us|gumroad\.com|spotify\.com|apple\.com|podcasts\.apple\.com|twitch\.tv|reddit\.com|medium\.com|threads\.net|wa\.me|whatsapp\.com|pinterest\.[a-z.]+|snapchat\.com|kick\.com|rumble\.com|udemy\.com|google\.com|goo\.gl|forms\.gle|docs\.google\.com|drive\.google\.com|play\.google\.com|apps\.apple\.com|chat\.whatsapp\.com|paypal\.me|buymeacoffee\.com|ko-fi\.com|shopify\.com|etsy\.com|notion\.so)$/i
 // Hosts where the site is theirs but the domain is not (no pattern guessing there)

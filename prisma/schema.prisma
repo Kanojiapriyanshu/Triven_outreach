@@ -195,11 +195,15 @@ model Lead {
   interestCategory String?
   persona          String?
 
+  // Lead Finder source (local business found on Google Maps / OpenStreetMap)
+  businessId String? @unique
+
   // Metadata
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   prospect      Prospect?      @relation(fields: [prospectId], references: [id], onDelete: SetNull)
+  business      Business?      @relation(fields: [businessId], references: [id], onDelete: SetNull)
   campaign      Campaign?      @relation(fields: [campaignId], references: [id])
   assignedUser  User?          @relation(fields: [assignedUserId], references: [id])
   senderAccount SenderAccount? @relation(fields: [senderAccountId], references: [id])
@@ -594,4 +598,124 @@ model ProspectEmail {
   @@index([prospectId])
   @@index([status])
   @@map("prospect_emails")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// LEAD FINDER (local businesses: Google Places API / OpenStreetMap → website → email)
+// ─────────────────────────────────────────────────────────────────────────────
+
+// One search: a niche across one or more locations. Runs in pages, resumable across worker ticks
+model LeadSearch {
+  id          String    @id @default(cuid())
+  query       String // what was searched ("dentist")
+  niche       String? // niche id from the catalog (dental, medspa…); null = free text
+  locations   String[]  @default([])
+  country     String? // ISO-2 bias for Google / filter for OSM
+  provider    String    @default("GOOGLE") // GOOGLE | OSM
+  maxPerPlace Int       @default(60)
+  status      String    @default("QUEUED") // QUEUED | RUNNING | DONE | ERROR | CANCELLED
+  cursor      Json? // { loc: index of the next location, token: Google page token }
+  found       Int       @default(0) // results returned
+  added       Int       @default(0) // new businesses saved
+  duplicates  Int       @default(0)
+  filtered    Int       @default(0) // off-niche / closed / chains dropped
+  apiCalls    Int       @default(0)
+  lastError   String?
+  startedAt   DateTime?
+  finishedAt  DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  businesses Business[]
+
+  @@index([createdAt])
+  @@map("lead_searches")
+}
+
+model Business {
+  id             String    @id @default(cuid())
+  placeId        String    @unique // Google place id, or "osm:node/123"
+  source         String    @default("GOOGLE") // GOOGLE | OSM | MANUAL
+  searchId       String?
+  name           String
+  niche          String?
+  category       String? // "Dentist", "Plumber"
+  types          String[]  @default([])
+  address        String?
+  city           String?
+  state          String?
+  postalCode     String?
+  country        String?
+  lat            Float?
+  lng            Float?
+  phone          String?
+  website        String?
+  domain         String?
+  mapsUrl        String?
+  rating         Float?
+  reviewCount    Int       @default(0)
+  businessStatus String? // OPERATIONAL | CLOSED_TEMPORARILY | CLOSED_PERMANENTLY
+  hours          String? // "Mon-Thu 8am-5pm, Fri-Sun closed"
+  openDays       Int?
+  closesAt       String? // usual weekday closing time "5pm"
+  // Decision maker (from the website, JSON-LD or a LinkedIn search result title)
+  ownerName      String?
+  ownerTitle     String?
+  ownerSource    String?
+  linkedIn       String?
+  facebook       String?
+  instagram      String?
+  contactFormUrl String?
+  techSignals    String[]  @default([]) // "Online booking (NexHealth)", "Live chat (Podium)"
+  siteFacts      String[]  @default([]) // "Accepting new patients", "Emergency appointments", "Since 1994"
+  isChain        Boolean   @default(false)
+  fitScore       Int       @default(0)
+  fitReasons     String[]  @default([])
+  tier           String    @default("COLD") // HOT | WARM | COLD
+  status         String    @default("NEW")
+  // NEW | RESEARCHING | READY | EMAIL_FOUND | NO_EMAIL | IN_CAMPAIGN | EXCLUDED | DO_NOT_CONTACT
+  excludeReason  String?
+  searchLog      String?   @db.Text // where we looked for an email, step by step
+  enrichedAt     DateTime?
+  enrichAttempts Int       @default(0)
+  notes          String?   @db.Text
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  search LeadSearch?     @relation(fields: [searchId], references: [id], onDelete: SetNull)
+  emails BusinessEmail[]
+  lead   Lead?
+
+  @@index([status])
+  @@index([fitScore])
+  @@index([niche])
+  @@index([domain])
+  @@index([searchId])
+  @@map("businesses")
+}
+
+model BusinessEmail {
+  id           String    @id @default(cuid())
+  businessId   String
+  email        String
+  source       String // LISTING | WEBSITE | SEARCH | HUNTER | PATTERN | ROLE_GUESS | MANUAL
+  sourceUrl    String?
+  personName   String?
+  position     String?
+  confidence   Int?
+  status       String    @default("UNKNOWN") // VERIFIED | RISKY | UNKNOWN | INVALID
+  verifyMethod String?
+  verifyDetail String?
+  isRole       Boolean   @default(false)
+  isFree       Boolean   @default(false)
+  isPrimary    Boolean   @default(false)
+  checkedAt    DateTime?
+  createdAt    DateTime  @default(now())
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@unique([businessId, email])
+  @@index([email])
+  @@index([status])
+  @@map("business_emails")
 }

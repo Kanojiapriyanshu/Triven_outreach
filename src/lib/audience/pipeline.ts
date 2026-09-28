@@ -14,6 +14,7 @@ import prisma from '../prisma'
 import { classifyComment, parseName, profileHints, computeIntent, computeIdentity, ownChannelProfile } from './classify'
 import { commentThreadsPage, getChannels, getVideos, latestUploadIds, YouTubeError, youtubeConfigured } from './youtube'
 import { storyComments, hnUser, hnUserUrl } from './hn'
+import { articleComments, devUser, devUserUrl } from './devto'
 import { inferCountry } from './country'
 import { discover, hostOf, patternGuesses, SHARED_HOSTS, crawlWebsite, type Findings } from './enrich'
 import { resolveIdentity, searchProvider } from './identity'
@@ -33,7 +34,7 @@ export interface CollectResult { pages: number; newComments: number; newProspect
 
 export async function collectComments(deadline: number): Promise<CollectResult> {
   const out: CollectResult = { pages: 0, newComments: 0, newProspects: 0, videosDone: 0, errors: [] }
-  const platforms = [...(youtubeConfigured() ? ['YOUTUBE'] : []), 'HN']
+  const platforms = [...(youtubeConfigured() ? ['YOUTUBE'] : []), 'HN', 'DEVTO']
   const videos = await prisma.audienceVideo.findMany({
     where: { status: { in: ['QUEUED', 'COLLECTING'] }, platform: { in: platforms } },
     include: { channel: { select: { youtubeChannelId: true } } },
@@ -45,6 +46,10 @@ export async function collectComments(deadline: number): Promise<CollectResult> 
     if (left(deadline) <= 8_000) break
     if (video.platform === 'HN') {
       await collectHnStory(video, out)
+      continue
+    }
+    if (video.platform === 'DEVTO') {
+      await collectDevArticle(video, out)
       continue
     }
     while (left(deadline) > 8_000) {
@@ -138,10 +143,52 @@ async function collectHnStory(video: IngestVideo & { youtubeVideoId: string; com
   }
 }
 
+/** A DEV article: its whole comment tree in one free call, plus the author (they wrote the tutorial) */
+async function collectDevArticle(video: IngestVideo & { youtubeVideoId: string; commentsCollected: number; maxComments: number; description: string | null }, out: CollectResult) {
+  try {
+    const articleId = video.youtubeVideoId.replace(/^devto:/, '')
+    const comments = await articleComments(articleId)
+    out.pages++
+    const rows: IngestComment[] = comments.slice(0, video.maxComments).map((c) => ({
+      externalId: `devto:${c.id}`,
+      authorExternalId: `devto:${c.author}`,
+      authorName: c.authorName || c.author,
+      avatarUrl: c.avatarUrl,
+      text: c.text,
+      likeCount: 0,
+      replyCount: 0,
+      parentId: c.parentId ? `devto:${c.parentId}` : null,
+      publishedAt: c.createdAt,
+      handle: c.author,
+    }))
+    // The author wrote a build tutorial: that counts as the strongest possible comment
+    const author = video.description?.match(/^author:(\S+)\s*\|\s*(.*)$/m)
+    if (author) {
+      rows.push({
+        externalId: `devto:${articleId}:op`, authorExternalId: `devto:${author[1]}`, authorName: author[2] || author[1], avatarUrl: null,
+        text: `I'm building this and wrote about it: ${video.title}.`, likeCount: 0, replyCount: 0, parentId: null, publishedAt: null, handle: author[1],
+      })
+    }
+    const { inserted, newProspects } = await ingestComments(video, rows)
+    out.newComments += inserted
+    out.newProspects += newProspects
+    await prisma.audienceVideo.update({
+      where: { id: video.id },
+      data: { commentsCollected: video.commentsCollected + inserted, status: 'DONE', lastCollectedAt: new Date(), lastError: null },
+    })
+    out.videosDone++
+  } catch (err) {
+    await prisma.audienceVideo.update({ where: { id: video.id }, data: { status: 'ERROR', lastError: (err as Error).message.slice(0, 300) } })
+    out.errors.push(`${video.title}: ${(err as Error).message}`)
+  }
+}
+
 interface IngestVideo { id: string; title: string; platform: string; interestCategory: string | null }
 interface IngestComment {
   externalId: string; authorExternalId: string; authorName: string; avatarUrl: string | null
   text: string; likeCount: number; replyCount: number; parentId: string | null; publishedAt: Date | null
+  /** Platform username when the display name differs from it (DEV) */
+  handle?: string
 }
 
 /** Store new comments (each exactly once), create one prospect per author, re-score them */
@@ -162,9 +209,9 @@ async function ingestComments(video: IngestVideo, comments: IngestComment[]) {
     return {
       youtubeChannelId: id,
       platform: video.platform,
-      profileUrl: video.platform === 'HN' ? hnUserUrl(c.authorName) : null,
+      profileUrl: video.platform === 'HN' ? hnUserUrl(c.authorName) : video.platform === 'DEVTO' ? devUserUrl(c.handle || c.authorName) : null,
       displayName: c.authorName.replace(/^@/, ''),
-      handle: video.platform === 'YOUTUBE' ? (c.authorName.startsWith('@') ? c.authorName : null) : c.authorName,
+      handle: video.platform === 'YOUTUBE' ? (c.authorName.startsWith('@') ? c.authorName : null) : c.handle || c.authorName,
       avatarUrl: c.avatarUrl,
       firstName: name.firstName || null,
       lastName: name.lastName || null,
@@ -353,7 +400,14 @@ export async function enrichProspects(deadline: number, settings: AudienceSettin
     const u = await hnUser(p.youtubeChannelId.replace(/^hn:/, ''))
     if (u) p.channelDescription = u.about || null
   }
-  const ytBatch = batch.filter((x) => x.platform !== 'HN')
+  // DEV: the profile's own summary, website, location and socials (as text the discovery step reads)
+  for (const p of batch.filter((x) => x.platform === 'DEVTO')) {
+    const u = await devUser(p.youtubeChannelId.replace(/^devto:/, ''))
+    if (!u) continue
+    p.channelDescription = [u.summary, u.website, u.twitter && `https://x.com/${u.twitter}`, u.github && `https://github.com/${u.github}`].filter(Boolean).join('\n') || null
+    if (u.location) p.location = u.location.slice(0, 120)
+  }
+  const ytBatch = batch.filter((x) => x.platform !== 'HN' && x.platform !== 'DEVTO')
   if (youtubeConfigured() && ytBatch.length) {
     try {
       const channels = await getChannels(ytBatch.map((p) => p.youtubeChannelId))

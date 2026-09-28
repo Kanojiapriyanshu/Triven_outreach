@@ -42,6 +42,8 @@ export function audienceVars(lead: AudienceLeadFields, firstName: string): Recor
   // "I came across your comment on Liam's video "How I built…" about building voice agents."
   const where = lead.sourcePlatform === 'HN'
     ? (video ? `in the Hacker News thread "${video}"` : 'on Hacker News')
+    : lead.sourcePlatform === 'DEVTO'
+    ? (video ? `on the DEV post "${video}"` : 'on DEV')
     : channel && video ? `on ${channel}'s video "${video}"` : video ? `on "${video}"` : channel ? `on one of ${channel}'s videos` : ''
   const commentHook = where
     ? `{I came across|I saw|I was reading} your comment ${where}${topic ? ` about ${topic}` : ''}.`

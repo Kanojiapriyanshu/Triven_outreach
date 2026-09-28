@@ -64,3 +64,22 @@ jobs:
           if [ "$HTTP_CODE" != "200" ]; then
             echo "::warning::Audience pipeline returned HTTP $HTTP_CODE"
           fi
+
+      - name: Run Lead Finder (business searches → websites → emails)
+        if: always()
+        env:
+          APP_URL: ${{ secrets.APP_URL }}
+          WORKER_SECRET: ${{ secrets.WORKER_SECRET }}
+        run: |
+          RESPONSE=$(curl -sS --max-time 90 -w "\n%{http_code}" \
+            -X POST "${APP_URL%/}/api/worker" \
+            -H "Content-Type: application/json" \
+            -H "x-worker-secret: $WORKER_SECRET" \
+            -d '{"action":"finder"}')
+
+          HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+          echo "HTTP $HTTP_CODE"
+          echo "$RESPONSE" | head -n-1
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "::warning::Lead Finder returned HTTP $HTTP_CODE"
+          fi

@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { requireAuth } from '@/lib/auth'
 import prisma from '@/lib/prisma'
 import { prospectWhere, prospectOrder } from '@/lib/audience/filters'
-import { commentUrl, profileUrl } from '@/lib/audience/links'
+import { commentUrl, profileUrl, PLATFORM_LABEL } from '@/lib/audience/links'
 import { personaLabel, interestLabel, countryName, PROSPECT_STATUSES, type ProspectStatus } from '@/lib/audience/taxonomy'
 
 /** RFC 4180 cell: quote when needed, double embedded quotes, neutralise spreadsheet formulas */
@@ -37,10 +37,10 @@ export async function GET(req: NextRequest) {
     const primary = p.emails.find((e) => e.status !== 'INVALID') || p.emails[0]
     lines.push([
       p.firstName ? [p.firstName, p.lastName].filter(Boolean).join(' ') : p.displayName,
-      p.platform === 'HN' ? 'Hacker News' : 'YouTube',
+      PLATFORM_LABEL[p.platform] || p.platform,
       profileUrl(p),
       best?.video.channel.title,
-      best ? commentUrl(best.video.platform, best.video.youtubeVideoId, best.youtubeCommentId) : '',
+      best ? commentUrl(best.video.platform, best.video.youtubeVideoId, best.youtubeCommentId, best.video.url) : '',
       best?.text,
       p.topic,
       interestLabel(p.interestCategory),

@@ -32,7 +32,7 @@ interface Detail {
   relevance: string; score: number; reason: string | null; topic: string | null; icebreaker: string | null; status: string
   consentSensitive: boolean; enrichedAt: string | null; enrichNotes: string | null; aiCheckedAt: string | null; firstSeenAt: string
   emails: Array<{ id: string; email: string; source: string; sourceUrl: string | null; status: string; verifyMethod: string | null; verifyDetail: string | null; isPrimary: boolean; isRole: boolean; isFree: boolean; confidence: number | null }>
-  comments: Array<{ id: string; youtubeCommentId: string; text: string; relevance: string; score: number; signals: string[]; likeCount: number; publishedAt: string | null; video: { title: string; youtubeVideoId: string; platform: string; channel: { title: string } } }>
+  comments: Array<{ id: string; youtubeCommentId: string; text: string; relevance: string; score: number; signals: string[]; likeCount: number; publishedAt: string | null; video: { title: string; youtubeVideoId: string; platform: string; url?: string | null; channel: { title: string } } }>
   lead: { id: string; status: string; firstEmailSentAt: string | null; hasReplied: boolean; campaign: { id: string; name: string } | null } | null
   sendableEmailId: string | null
   platform: string; profileUrl: string | null; countrySource: string | null; countryConfidence: number
@@ -284,7 +284,7 @@ export default function ProspectDialog({ id, onClose, onChanged, onPush }: { id:
                   <div key={c.id} className="rounded-lg border border-slate-100 p-2.5">
                     <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-slate-500">
                       <RelevanceBadge value={c.relevance} score={c.score} />
-                      <a href={commentUrl(c.video.platform, c.video.youtubeVideoId, c.youtubeCommentId)} target="_blank" rel="noreferrer" className="hover:text-indigo-600 truncate max-w-[420px]">{c.video.channel.title} · {c.video.title} <ExternalLink className="inline h-3 w-3" /></a>
+                      <a href={commentUrl(c.video.platform, c.video.youtubeVideoId, c.youtubeCommentId, c.video.url)} target="_blank" rel="noreferrer" className="hover:text-indigo-600 truncate max-w-[420px]">{c.video.channel.title} · {c.video.title} <ExternalLink className="inline h-3 w-3" /></a>
                       {c.likeCount > 0 && <span>· {c.likeCount} likes</span>}
                       {c.signals.filter((s) => s !== 'generic').map((s) => <span key={s} className="rounded bg-slate-100 px-1">{s.replace(/_/g, ' ')}</span>)}
                     </div>

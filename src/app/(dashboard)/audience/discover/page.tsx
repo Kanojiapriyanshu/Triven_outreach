@@ -4,7 +4,7 @@ import Link from 'next/link'
 import useSWR from 'swr'
 import { toast } from 'sonner'
 import {
-  Telescope, Search, Link2, ListVideo, RefreshCw, Trash2, Eye, EyeOff, Play, SkipForward, Users, MessageSquare, ExternalLink,
+  Telescope, Search, Link2, ListVideo, RefreshCw, Trash2, Eye, EyeOff, Play, SkipForward, Users, MessageSquare, ExternalLink, Code2,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
@@ -43,6 +43,7 @@ const TABS = [
   { key: 'search', label: 'Find videos', icon: Search },
   { key: 'channels', label: 'Channels', icon: Users },
   { key: 'hn', label: 'Hacker News', icon: MessageSquare },
+  { key: 'devto', label: 'DEV', icon: Code2 },
   { key: 'queue', label: 'Collection', icon: ListVideo },
 ] as const
 
@@ -67,7 +68,7 @@ export default function DiscoverPage() {
         section="Audience"
         title="Discover"
         icon={Telescope}
-        description="Find conversations where builders talk about AI: YouTube videos and Hacker News threads. Target a country, then collect the comments."
+        description="Find conversations where builders talk about AI: YouTube videos, Hacker News threads and DEV articles. Target a country, then collect the comments."
         actions={
           <div className="text-right">
             <PipelineRunner backlog={overview?.backlog} onProgress={() => mutateOverview()} />
@@ -96,6 +97,7 @@ export default function DiscoverPage() {
       {tab === 'search' && <SearchTab onQueued={() => { mutateOverview(); setTab('queue') }} />}
       {tab === 'channels' && <ChannelsTab />}
       {tab === 'hn' && <HnTab onQueued={() => { mutateOverview(); setTab('queue') }} />}
+      {tab === 'devto' && <DevTab onQueued={() => { mutateOverview(); setTab('queue') }} />}
       {tab === 'queue' && <QueueTab />}
     </div>
   )
@@ -250,7 +252,7 @@ function VideoCard({ v, checked, onToggle }: { v: Video; checked: boolean; onTog
           {v.durationSeconds > 0 && <span className="absolute bottom-1 right-1 rounded bg-black/75 px-1 text-[10px] text-white">{duration(v.durationSeconds)}</span>}
         </button>
         <div className="min-w-0 flex-1">
-          <a href={videoUrl(v.platform, v.youtubeVideoId)} target="_blank" rel="noreferrer" className="line-clamp-2 text-sm font-medium text-slate-900 hover:text-indigo-600">{v.title}</a>
+          <a href={videoUrl(v.platform, v.youtubeVideoId, v.url)} target="_blank" rel="noreferrer" className="line-clamp-2 text-sm font-medium text-slate-900 hover:text-indigo-600">{v.title}</a>
           <p className="text-xs text-slate-500 truncate">{v.channel.title}{v.channel.country ? ` · ${flag(v.channel.country)} ${COUNTRIES[v.channel.country]?.name || v.channel.country}` : ''}</p>
           <p className="text-[11px] text-slate-400 mt-0.5">
             {fmtNum(v.viewCount)} views · <MessageSquare className="inline h-3 w-3 -mt-0.5" /> {fmtNum(v.commentCount)} · {v.publishedAt ? fmtRelative(v.publishedAt) : ''}
@@ -379,7 +381,7 @@ function ChannelsTab() {
                   <div className="flex items-center gap-2.5">
                     <Avatar src={c.thumbnailUrl} name={c.title} size={28} />
                     <div className="min-w-0">
-                      <a href={c.platform === 'HN' ? 'https://news.ycombinator.com' : `https://www.youtube.com/channel/${c.youtubeChannelId}`} target="_blank" rel="noreferrer" className="font-medium text-slate-800 hover:text-indigo-600">{c.title}</a>
+                      <a href={c.platform === 'HN' ? 'https://news.ycombinator.com' : c.platform === 'DEVTO' ? 'https://dev.to' : `https://www.youtube.com/channel/${c.youtubeChannelId}`} target="_blank" rel="noreferrer" className="font-medium text-slate-800 hover:text-indigo-600">{c.title}</a>
                       <p className="text-[11px] text-slate-400 truncate max-w-md">{c.handle} {c.country ? `· ${COUNTRIES[c.country]?.name || c.country}` : ''}</p>
                     </div>
                   </div>
@@ -390,7 +392,7 @@ function ChannelsTab() {
                 <td className="px-3 text-xs text-slate-500">{c.lastScannedAt ? fmtRelative(c.lastScannedAt) : 'never'}</td>
                 <td className="px-3">
                   <div className="flex justify-end gap-1">
-                    {c.platform !== 'HN' && <Button size="sm" variant="outline" onClick={() => scan(c)} loading={busy === c.id}><RefreshCw className="h-3.5 w-3.5" />Scan latest</Button>}
+                    {c.platform === 'YOUTUBE' && <Button size="sm" variant="outline" onClick={() => scan(c)} loading={busy === c.id}><RefreshCw className="h-3.5 w-3.5" />Scan latest</Button>}
                     <Button size="sm" variant="ghost" asChild title="People from this channel"><Link href={`/audience/prospects?channelId=${c.id}`}><Users className="h-4 w-4" /></Link></Button>
                     <Button size="sm" variant="ghost" onClick={() => toggleTrack(c)} title={c.isTracked ? 'Stop tracking' : 'Track'}>{c.isTracked ? <Eye className="h-4 w-4" /> : <EyeOff className="h-4 w-4" />}</Button>
                     <Button size="sm" variant="ghost" className="text-slate-400 hover:text-red-500" onClick={() => remove(c)} title="Remove"><Trash2 className="h-4 w-4" /></Button>
@@ -446,7 +448,7 @@ function QueueTab() {
               return (
                 <tr key={v.id} className="border-b border-slate-100">
                   <td className="px-4 py-2.5">
-                    <a href={videoUrl(v.platform, v.youtubeVideoId)} target="_blank" rel="noreferrer" className="font-medium text-slate-800 hover:text-indigo-600 line-clamp-1">{v.title}</a>
+                    <a href={videoUrl(v.platform, v.youtubeVideoId, v.url)} target="_blank" rel="noreferrer" className="font-medium text-slate-800 hover:text-indigo-600 line-clamp-1">{v.title}</a>
                     <p className="text-[11px] text-slate-400">{v.channel.title} · fit {v.score} · {fmtNum(v.commentCount)} comments on YouTube</p>
                     {v.lastError && <p className="text-[11px] text-red-500">{v.lastError}</p>}
                   </td>
@@ -466,7 +468,7 @@ function QueueTab() {
                         <Button size="sm" variant="outline" onClick={() => act('queue', [v.id])} title={v.status === 'DONE' ? 'Collect new comments since last time' : 'Collect'}><RefreshCw className="h-3.5 w-3.5" />{v.status === 'DONE' ? 'Refresh' : 'Collect'}</Button>
                       )}
                       {['QUEUED', 'COLLECTING'].includes(v.status) && <Button size="sm" variant="ghost" onClick={() => act('skip', [v.id])} title="Stop collecting"><SkipForward className="h-4 w-4" /></Button>}
-                      <Button size="sm" variant="ghost" asChild title="Open"><a href={videoUrl(v.platform, v.youtubeVideoId)} target="_blank" rel="noreferrer"><ExternalLink className="h-4 w-4" /></a></Button>
+                      <Button size="sm" variant="ghost" asChild title="Open"><a href={videoUrl(v.platform, v.youtubeVideoId, v.url)} target="_blank" rel="noreferrer"><ExternalLink className="h-4 w-4" /></a></Button>
                       <Button size="sm" variant="ghost" className="text-slate-400 hover:text-red-500" onClick={() => act('delete', [v.id])}><Trash2 className="h-4 w-4" /></Button>
                     </div>
                   </td>
@@ -582,6 +584,103 @@ function HnTab({ onQueued }: { onQueued: () => void }) {
         ))}
       </Card>
       {!results.length && !searching && <p className="text-sm text-slate-400 text-center py-10">Pick a preset or search Hacker News threads.</p>}
+    </div>
+  )
+}
+
+// ─── DEV (dev.to) ────────────────────────────────────────────────────────────
+
+const DEV_PRESETS = [
+  { label: '#aiagents', tag: 'aiagents' }, { label: '#n8n', tag: 'n8n' }, { label: '#automation', tag: 'automation' },
+  { label: '#llm', tag: 'llm' }, { label: '#rag', tag: 'rag' }, { label: '#langchain', tag: 'langchain' },
+  { label: '#voiceai', tag: 'voiceai' }, { label: '#openai', tag: 'openai' }, { label: '#saas', tag: 'saas' }, { label: '#showdev', tag: 'showdev' },
+]
+
+function DevTab({ onQueued }: { onQueued: () => void }) {
+  const [tag, setTag] = useState('')
+  const [days, setDays] = useState(30)
+  const [minComments, setMinComments] = useState(3)
+  const [results, setResults] = useState<Video[]>([])
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [searching, setSearching] = useState(false)
+
+  async function search(t = tag) {
+    if (t.trim().length < 2) return toast.error('Type a tag, e.g. aiagents')
+    setSearching(true)
+    try {
+      const res = await fetch('/api/audience/devto', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tag: t, days, minComments }),
+      })
+      const d = await res.json()
+      if (!res.ok) return toast.error(d.error || 'Search failed')
+      setResults(d.videos)
+      if (!d.videos.length) toast.info('No articles with enough discussion. Try a longer period or fewer comments.')
+      setSelected(new Set(d.videos.filter((v: Video) => v.score >= 45 && v.status === 'DISCOVERED').slice(0, 15).map((v: Video) => v.id)))
+    } finally { setSearching(false) }
+  }
+
+  async function queue() {
+    const res = await fetch('/api/audience/videos', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'queue', ids: [...selected] }) })
+    const d = await res.json()
+    if (!res.ok) return toast.error(d.error || 'Could not queue')
+    toast.success(`${d.count} article${d.count === 1 ? '' : 's'} queued. DEV is free: no quota used.`)
+    setSelected(new Set())
+    onQueued()
+  }
+
+  return (
+    <div className="space-y-4">
+      <Card>
+        <CardContent className="p-4 space-y-3">
+          <p className="text-xs text-slate-500">
+            Developers publishing build tutorials on AI agents and automation, and the people asking how to build them in the comments.
+            Free, no key. Authors count as prospects too (they wrote the tutorial). Only the website on their own DEV profile is researched.
+          </p>
+          <div className="flex flex-wrap gap-1.5">
+            {DEV_PRESETS.map((p) => (
+              <button key={p.tag} onClick={() => { setTag(p.tag); search(p.tag) }} disabled={searching}
+                className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs text-slate-700 hover:border-indigo-400 hover:text-indigo-700">{p.label}</button>
+            ))}
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Input value={tag} onChange={(e) => setTag(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && search()} placeholder="Tag, e.g. aiagents" className="flex-1 min-w-[200px]" />
+            <select value={days} onChange={(e) => setDays(Number(e.target.value))} className="h-9 rounded-lg border border-slate-300 px-2 text-sm">
+              <option value={7}>Top this week</option><option value={30}>Top this month</option><option value={365}>Top this year</option>
+            </select>
+            <select value={minComments} onChange={(e) => setMinComments(Number(e.target.value))} className="h-9 rounded-lg border border-slate-300 px-2 text-sm">
+              <option value={1}>1+ comments</option><option value={3}>3+ comments</option><option value={10}>10+ comments</option><option value={25}>25+ comments</option>
+            </select>
+            <Button onClick={() => search()} loading={searching}><Search className="h-4 w-4" />Search</Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      {results.length > 0 && (
+        <div className="sticky top-14 z-10 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-indigo-200 bg-indigo-50/95 px-4 py-2.5 backdrop-blur">
+          <span className="text-sm text-indigo-900"><strong>{selected.size}</strong> selected · {results.filter((v) => selected.has(v.id)).reduce((n, v) => n + v.commentCount, 0).toLocaleString('en-US')} comments</span>
+          <Button size="sm" onClick={queue} disabled={!selected.size}><Play className="h-3.5 w-3.5" />Collect comments</Button>
+        </div>
+      )}
+
+      <Card className="overflow-hidden divide-y divide-slate-100">
+        {results.map((v) => (
+          <label key={v.id} className={`flex items-start gap-3 px-4 py-3 cursor-pointer hover:bg-slate-50 ${selected.has(v.id) ? 'bg-indigo-50/40' : ''}`}>
+            <input type="checkbox" className="mt-1" checked={selected.has(v.id)} onChange={() => setSelected((s) => { const n = new Set(s); if (n.has(v.id)) n.delete(v.id); else n.add(v.id); return n })} />
+            <div className="min-w-0 flex-1">
+              <a href={videoUrl('DEVTO', v.youtubeVideoId, v.url)} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} className="text-sm font-medium text-slate-900 hover:text-indigo-600">{v.title}</a>
+              <p className="text-[11px] text-slate-500 mt-0.5">
+                by {v.description?.match(/^author:\S+\s*\|\s*(.*)$/m)?.[1] || 'unknown'} · {v.likeCount} reactions · <MessageSquare className="inline h-3 w-3 -mt-0.5" /> {v.commentCount} comments · {v.publishedAt ? fmtRelative(v.publishedAt) : ''}
+              </p>
+            </div>
+            <div className="text-right shrink-0">
+              <span className={`rounded px-1.5 py-0.5 text-[11px] font-semibold ${v.score >= 60 ? 'text-emerald-700 bg-emerald-50' : v.score >= 40 ? 'text-sky-700 bg-sky-50' : 'text-slate-500 bg-slate-50'}`} title={v.scoreReasons || ''}>Fit {v.score}</span>
+              {v.status !== 'DISCOVERED' && <p className={`mt-1 rounded px-1.5 py-0.5 text-[10px] font-medium ${STATUS_STYLE[v.status]}`}>{v.status.toLowerCase()}</p>}
+            </div>
+          </label>
+        ))}
+      </Card>
+      {!results.length && !searching && <p className="text-sm text-slate-400 text-center py-10">Pick a tag or search DEV articles.</p>}
     </div>
   )
 }

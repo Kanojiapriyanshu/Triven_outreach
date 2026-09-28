@@ -34,6 +34,8 @@ export type LeadSource =
   | 'LINKEDIN'
   | 'COLD_OUTREACH'
   | 'YOUTUBE'
+  | 'GOOGLE_MAPS'
+  | 'OSM'
   | 'OTHER'
 
 export type ActivityType =

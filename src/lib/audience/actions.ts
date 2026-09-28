@@ -11,6 +11,7 @@ import { getAudienceSettings } from './settings'
 import { INTERESTS, AUDIENCE_CAMPAIGNS, type Interest } from './taxonomy'
 import { commentUrl, profileUrl, PLATFORM_LABEL } from './links'
 import { HN_CHANNEL_ID, HN_CHANNEL_TITLE, hnStoryUrl, type HnStory } from './hn'
+import { DEVTO_CHANNEL_ID, DEVTO_CHANNEL_TITLE, type DevArticle } from './devto'
 
 export { AUDIENCE_CAMPAIGNS }
 
@@ -202,7 +203,7 @@ export async function pushToCampaign(prospectIds: string[], target: { campaignId
     if (!campaignId) { skip('no campaign for this persona'); continue }
 
     const best = p.comments[0]
-    const videoUrl = best ? commentUrl(best.video.platform, best.video.youtubeVideoId, best.youtubeCommentId) : null
+    const videoUrl = best ? commentUrl(best.video.platform, best.video.youtubeVideoId, best.youtubeCommentId, best.video.url) : null
     const interest = (p.interestCategory || 'GENERAL_AI') as Interest
     const lead = await prisma.lead.create({
       data: {
@@ -350,6 +351,53 @@ export async function saveHnStories(stories: HnStory[]) {
     saved.push(await prisma.audienceVideo.upsert({
       where: { youtubeVideoId: `hn:${s.id}` },
       create: { youtubeVideoId: `hn:${s.id}`, ...data },
+      update: data,
+      include: { channel: { select: { title: true, handle: true, country: true } } },
+    }))
+  }
+  return saved
+}
+
+// ─── DEV (dev.to) ────────────────────────────────────────────────────────────
+
+const DEV_BUILDER_TAGS = /^(aiagents|agents|ai|llm|automation|n8n|langchain|rag|openai|chatgpt|voiceai|machinelearning|saas|startup|nocode|lowcode|webdev|python|javascript|tutorial|showdev)$/
+
+/** Save DEV articles as sources, scored for how many builders the article and its comments attract */
+export async function saveDevArticles(articles: DevArticle[]) {
+  const channel = await prisma.audienceChannel.upsert({
+    where: { youtubeChannelId: DEVTO_CHANNEL_ID },
+    create: { youtubeChannelId: DEVTO_CHANNEL_ID, platform: 'DEVTO', title: DEVTO_CHANNEL_TITLE, handle: 'dev.to', topicScore: 75, description: 'Developers writing and discussing build tutorials' },
+    update: {},
+  })
+  const saved = []
+  for (const a of articles) {
+    const ageDays = (Date.now() - a.publishedAt.getTime()) / 86_400_000
+    const fit = scoreVideo({ title: `${a.title} ${a.tags.join(' ')}`, viewCount: 0, commentCount: a.comments, likeCount: a.reactions, publishedAt: a.publishedAt, durationSeconds: 0 })
+    const reasons = [`${a.comments} comments`, `${a.reactions} reactions`]
+    let score = Math.round(fit.score * 0.5)
+    const builderTags = a.tags.filter((t) => DEV_BUILDER_TAGS.test(t)).length
+    score += Math.min(20, builderTags * 5)
+    if (/\b(how i built|i built|building|tutorial|step.by.step|guide|we built|lessons)\b/i.test(a.title)) { score += 12; reasons.push('build write-up: the author is a builder') }
+    score += a.comments >= 30 ? 15 : a.comments >= 10 ? 10 : 5
+    if (ageDays <= 30) { score += 8; reasons.push('recent') }
+    const data = {
+      channelId: channel.id,
+      platform: 'DEVTO',
+      title: a.title,
+      url: a.url,
+      // The author is read back from here when collecting (their tutorial counts as a comment)
+      description: `author:${a.author} | ${a.authorName}\n${a.description}`.slice(0, 2000),
+      publishedAt: a.publishedAt,
+      viewCount: 0,
+      likeCount: a.reactions,
+      commentCount: a.comments,
+      score: Math.min(100, score),
+      scoreReasons: reasons.join(' · '),
+      interestCategory: fit.interest,
+    }
+    saved.push(await prisma.audienceVideo.upsert({
+      where: { youtubeVideoId: `devto:${a.id}` },
+      create: { youtubeVideoId: `devto:${a.id}`, ...data },
       update: data,
       include: { channel: { select: { title: true, handle: true, country: true } } },
     }))

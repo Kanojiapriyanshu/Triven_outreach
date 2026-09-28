@@ -17,29 +17,31 @@ import {
   Radar,
   Telescope,
   UserSearch,
+  MapPinned,
   type LucideIcon,
 } from 'lucide-react'
 import useSWR from 'swr'
 import { cn } from '@/lib/utils'
 
-interface NavItem { label: string; href: string; icon: LucideIcon; exact?: boolean }
+interface NavItem { label: string; href: string; icon: LucideIcon; exact?: boolean; badge?: 'unread' | 'finderReady' | 'prospectsReady' }
 
 const sections: Array<{ title: string; items: NavItem[] }> = [
   {
     title: 'Workspace',
     items: [
       { label: 'Dashboard', href: '/', icon: LayoutDashboard, exact: true },
-      { label: 'Inbox', href: '/inbox', icon: Inbox },
+      { label: 'Inbox', href: '/inbox', icon: Inbox, badge: 'unread' },
       { label: "Today's work", href: '/today', icon: CalendarCheck },
       { label: 'Analytics', href: '/analytics', icon: BarChart2 },
     ],
   },
   {
-    title: 'Audience',
+    title: 'Prospecting',
     items: [
-      { label: 'Overview', href: '/audience', icon: Radar, exact: true },
+      { label: 'Lead Finder', href: '/finder', icon: MapPinned, badge: 'finderReady' },
+      { label: 'Audience', href: '/audience', icon: Radar, exact: true },
       { label: 'Discover', href: '/audience/discover', icon: Telescope },
-      { label: 'Prospects', href: '/audience/prospects', icon: UserSearch },
+      { label: 'Prospects', href: '/audience/prospects', icon: UserSearch, badge: 'prospectsReady' },
     ],
   },
   {
@@ -67,8 +69,7 @@ async function handleLogout() {
 
 export default function Sidebar({ userName }: { userName?: string }) {
   const pathname = usePathname()
-  const { data: unreadData } = useSWR<{ unread: number }>('/api/inbox/unread', (u: string) => fetch(u).then((r) => r.json()), { refreshInterval: 60_000 })
-  const unread = unreadData?.unread ?? 0
+  const { data: counts } = useSWR<{ unread: number; finderReady: number; prospectsReady: number }>('/api/nav', (u: string) => fetch(u).then((r) => r.json()), { refreshInterval: 60_000 })
   const initials = (userName || 'T').split(/\s+/).map((w) => w[0]).slice(0, 2).join('').toUpperCase()
 
   return (
@@ -88,7 +89,8 @@ export default function Sidebar({ userName }: { userName?: string }) {
           <div key={section.title}>
             <p className="px-3 pb-1.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-500">{section.title}</p>
             <div className="space-y-0.5">
-              {section.items.map(({ label, href, icon: Icon, exact }) => {
+              {section.items.map(({ label, href, icon: Icon, exact, badge }) => {
+                const count = badge ? counts?.[badge] ?? 0 : 0
                 const isActive = exact ? pathname === href : pathname === href || pathname.startsWith(`${href}/`)
                 return (
                   <Link
@@ -102,8 +104,11 @@ export default function Sidebar({ userName }: { userName?: string }) {
                     {isActive && <span className="absolute left-0 top-1.5 bottom-1.5 w-[3px] rounded-r bg-brand-gold" />}
                     <Icon className={cn('h-4 w-4 shrink-0', isActive ? 'text-brand-gold' : 'text-slate-500 group-hover:text-slate-300')} />
                     <span className="flex-1">{label}</span>
-                    {href === '/inbox' && unread > 0 && (
-                      <span className="rounded-full bg-brand-gold px-1.5 text-[10px] font-semibold leading-4 text-ink">{unread > 99 ? '99+' : unread}</span>
+                    {count > 0 && (
+                      <span title={badge === 'unread' ? 'Unread replies' : 'Ready to add to a campaign'}
+                        className={cn('rounded-full px-1.5 text-[10px] font-semibold leading-4', badge === 'unread' ? 'bg-brand-gold text-ink' : 'bg-white/10 text-slate-200')}>
+                        {count > 999 ? '999+' : count}
+                      </span>
                     )}
                   </Link>
                 )
