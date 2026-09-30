@@ -36,7 +36,7 @@ export async function campaignCapacity(): Promise<CampaignCapacity[]> {
     minutesSinceLast('tick'),
   ])
   const live = senders.filter((s) => !s.pausedUntil || s.pausedUntil < now)
-  const allowance = new Map(await Promise.all(live.map(async (s) => [s.id, await dailyAllowance(s, settings.dailyCapPerSender)] as const)))
+  const allowance = new Map(await Promise.all(live.map(async (s) => [s.id, await dailyAllowance(s, settings.dailyCapPerSender, settings.warmupStart)] as const)))
 
   return Promise.all(campaigns.map(async (c) => {
     const [queued, sentToday] = await Promise.all([

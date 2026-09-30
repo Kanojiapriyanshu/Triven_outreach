@@ -81,7 +81,7 @@ export async function runSequencer(deadline: number): Promise<SequencerResult> {
       select: { id: true, sentAt: true },
     })
     const freeAt = last?.sentAt ? last.sentAt.getTime() + gapAfter(last.id, settings.minGapMinutes, settings.maxGapMinutes) : 0
-    const allowance = await dailyAllowance(sender, settings.dailyCapPerSender)
+    const allowance = await dailyAllowance(sender, settings.dailyCapPerSender, settings.warmupStart)
     return { sender, lastAt: last?.sentAt?.getTime() ?? 0, freeAt, allowance }
   }))
   inboxes.sort((a, b) => a.lastAt - b.lastAt)

@@ -7,6 +7,8 @@ export interface OutreachSettings {
   followUpDays: [number, number, number]
   /** Max automatic sends per Gmail account per day (first emails + follow-ups) */
   dailyCapPerSender: number
+  /** Emails per inbox per day in a new inbox's first week (then 10, 20, 30 a day by week) */
+  warmupStart: number
   /** Random wait between two emails from the same inbox, in minutes (Instantly-style) */
   minGapMinutes: number
   maxGapMinutes: number
@@ -22,6 +24,7 @@ export const DEFAULT_SETTINGS: OutreachSettings = {
   sendWindow: DEFAULT_SEND_WINDOW,
   followUpDays: [3, 7, 14],
   dailyCapPerSender: 40,
+  warmupStart: 5,
   minGapMinutes: 8,
   maxGapMinutes: 15,
   demoPhone: '',

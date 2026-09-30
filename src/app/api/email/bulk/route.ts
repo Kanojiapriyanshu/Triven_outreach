@@ -65,7 +65,7 @@ export async function POST(req: NextRequest) {
   const blockedDomains = new Set(suppressed.map((s) => s.domain).filter(Boolean))
 
   // Spread leads across inboxes, fullest allowance first
-  const allowances = await Promise.all(senders.map(async (s) => ({ s, a: await dailyAllowance(s, settings.dailyCapPerSender) })))
+  const allowances = await Promise.all(senders.map(async (s) => ({ s, a: await dailyAllowance(s, settings.dailyCapPerSender, settings.warmupStart) })))
   allowances.sort((x, y) => y.a.left - x.a.left)
   const rotation = allowances.map((x) => x.s)
 

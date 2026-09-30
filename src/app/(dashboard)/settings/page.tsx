@@ -17,6 +17,7 @@ interface Settings {
   sendWindow: SendWindow
   followUpDays: [number, number, number]
   dailyCapPerSender: number
+  warmupStart: number
   minGapMinutes: number
   maxGapMinutes: number
   demoPhone: string
@@ -25,7 +26,7 @@ interface Settings {
 }
 
 const DEFAULTS: Settings = {
-  sendWindow: DEFAULT_SEND_WINDOW, followUpDays: [3, 7, 14], dailyCapPerSender: 40, minGapMinutes: 8, maxGapMinutes: 15, demoPhone: '', builderUrl: '', senderAddress: '',
+  sendWindow: DEFAULT_SEND_WINDOW, followUpDays: [3, 7, 14], dailyCapPerSender: 40, warmupStart: 5, minGapMinutes: 8, maxGapMinutes: 15, demoPhone: '', builderUrl: '', senderAddress: '',
 }
 
 const ZONES = [
@@ -158,7 +159,19 @@ export default function SettingsPage() {
               onChange={(e) => setForm((f) => ({ ...f, dailyCapPerSender: Number(e.target.value) || 1 }))}
               className="mt-1"
             />
-            <p className="text-xs text-slate-400 mt-1">New accounts warm up automatically: 5 a day in week 1, then 10, 20 and 30, before this limit applies.</p>
+            <p className="text-xs text-slate-400 mt-1">New accounts warm up automatically: {form.warmupStart ?? 5} a day in week 1, then 10, 20 and 30, before this limit applies.</p>
+          </div>
+          <div className="max-w-xs">
+            <Label>Week-1 warm-up: emails per inbox per day</Label>
+            <Input
+              type="number"
+              min={1}
+              max={30}
+              value={form.warmupStart ?? 5}
+              onChange={(e) => setForm((f) => ({ ...f, warmupStart: Math.min(30, Math.max(1, Number(e.target.value) || 1)) }))}
+              className="mt-1"
+            />
+            <p className="text-xs text-slate-400 mt-1">5 is safest for brand-new Gmail accounts. Higher sends more on day one but raises the spam risk.</p>
           </div>
           <div>
             <Label>Gap between emails from the same inbox</Label>

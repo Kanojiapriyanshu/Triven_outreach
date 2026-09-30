@@ -136,7 +136,7 @@ export async function POST(req: NextRequest) {
     // ── Send now ───────────────────────────────────────────────────────────────
     // Cold first emails count against the account's warm-up allowance; replies and one-offs don't
     if (kind === 'FIRST_EMAIL') {
-      const allowance = await dailyAllowance(sender, settings.dailyCapPerSender)
+      const allowance = await dailyAllowance(sender, settings.dailyCapPerSender, settings.warmupStart)
       if (allowance.left <= 0) {
         return NextResponse.json({
           error: `${sender.email} has sent ${allowance.used}/${allowance.limit} today${allowance.warmingUp ? ` (warm-up day ${allowance.warmupDay})` : ''}. Use Schedule → next send window, or send from another account.`,

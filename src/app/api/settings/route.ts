@@ -16,6 +16,7 @@ const settingsSchema = z.object({
   }).refine((w) => w.start < w.end, { message: 'Window end must be after start' }),
   followUpDays: z.tuple([z.number().int().min(1), z.number().int().min(1), z.number().int().min(1)]),
   dailyCapPerSender: z.number().int().min(1).max(500),
+  warmupStart: z.number().int().min(1).max(30).default(5),
   minGapMinutes: z.number().int().min(1).max(240),
   maxGapMinutes: z.number().int().min(1).max(240),
   demoPhone: z.string().trim().max(40).regex(/^[+\d\s().-]*$/, 'Phone number can only contain digits, spaces, + ( ) -').default(''),

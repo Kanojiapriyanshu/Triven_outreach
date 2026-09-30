@@ -9,8 +9,8 @@ export async function GET() {
   const session = await requireAuth()
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-  const { dailyCapPerSender } = await getSettings()
+  const { dailyCapPerSender, warmupStart } = await getSettings()
   const senders = await prisma.senderAccount.findMany({ select: { id: true, email: true, dailyEmailTarget: true } })
-  const entries = await Promise.all(senders.map(async (s) => [s.id, await dailyAllowance(s, dailyCapPerSender)] as const))
+  const entries = await Promise.all(senders.map(async (s) => [s.id, await dailyAllowance(s, dailyCapPerSender, warmupStart)] as const))
   return NextResponse.json(Object.fromEntries(entries))
 }

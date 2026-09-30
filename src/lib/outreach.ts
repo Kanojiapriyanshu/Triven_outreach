@@ -70,17 +70,17 @@ export async function domainAcceptsMail(domain: string) {
 
 /**
  * How many emails this account may send today. New accounts ramp up slowly
- * (5 → 10 → 20 → 30 a day by week), because a fresh Gmail suddenly sending cold
+ * (warmupStart, default 5 → 10 → 20 → 30 a day by week), because a fresh Gmail suddenly sending cold
  * email is the #1 reason mail lands in spam.
  */
-export async function dailyAllowance(sender: { email: string; dailyEmailTarget: number }, globalCap: number) {
+export async function dailyAllowance(sender: { email: string; dailyEmailTarget: number }, globalCap: number, warmupStart = 5) {
   const first = await prisma.emailMessage.findFirst({
     where: { direction: 'OUTBOUND', fromAddress: sender.email },
     orderBy: { sentAt: 'asc' },
     select: { sentAt: true },
   })
   const days = first?.sentAt ? Math.floor((Date.now() - first.sentAt.getTime()) / 86_400_000) : 0
-  const ramp = days < 7 ? 5 : days < 14 ? 10 : days < 21 ? 20 : days < 28 ? 30 : Infinity
+  const ramp = days < 7 ? warmupStart : days < 14 ? Math.max(10, warmupStart) : days < 21 ? Math.max(20, warmupStart) : days < 28 ? Math.max(30, warmupStart) : Infinity
   const limit = Math.min(ramp, globalCap, sender.dailyEmailTarget || globalCap)
   const used = await sentInLast24h(sender.email)
   return { limit, used, left: Math.max(0, limit - used), warmingUp: ramp !== Infinity, warmupDay: days + 1 }
