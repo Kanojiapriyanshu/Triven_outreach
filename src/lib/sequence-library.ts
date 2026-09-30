@@ -18,8 +18,16 @@ export interface LibrarySequence {
   steps: LibraryStep[]
 }
 
-const SIGN = `{{senderFirstName}}
-Triven`
+// Every niche email closes the same way, with the postal address (CAN-SPAM, CASL, Spam Act) at the very bottom
+const SIGN = `{Thank you for your time and consideration.|Thanks for your time and consideration.|I appreciate your time and consideration.}
+
+Thanks and regards,
+{{senderName}}
+Triven.ai`
+
+const FOOTER = `{{#if senderAddress}}
+
+{{senderAddress}}{{/if}}`
 
 export const SEQUENCE_LIBRARY: LibrarySequence[] = [
   ...USE_CASE_SEQUENCES,
@@ -47,9 +55,9 @@ export const SEQUENCE_LIBRARY: LibrarySequence[] = [
 
 {{forwardLine}}
 
-{{senderFirstName}}
+${SIGN}
 
-{If this isn't relevant, just say so and I won't follow up.|Not a priority right now? Just reply "no" and I'll leave it there.}`,
+{If this isn't relevant, just say so and I won't follow up.|Not a priority right now? Just reply "no" and I'll leave it there.}${FOOTER}`,
       },
       {
         type: 'FOLLOW_UP_1',
@@ -63,7 +71,7 @@ Picture a new patient calling {{companyName|your practice}} {{testMoment}}. Inst
 
 {I can have a version trained on {{companyName|your practice}} ready within a day.|I can set that up for {{companyName|your practice}} within a day.} {Shall I?|Want me to go ahead?}
 
-{{senderFirstName}}`,
+${SIGN}${FOOTER}`,
       },
       {
         type: 'FOLLOW_UP_2',
@@ -79,7 +87,7 @@ Triven costs a small fraction of that. No new hire, no training, and nothing cha
 
 {Would 10 minutes this week be worth it?|Open to a quick 10-minute look this week?}
 
-{{senderFirstName}}`,
+${SIGN}${FOOTER}`,
       },
       {
         type: 'FOLLOW_UP_3',
@@ -97,8 +105,9 @@ One thing worth doing either way: call {{companyName|your practice}} {{testMomen
 
 If it's ever useful, reply to this and I'll have a demo ready within a day.{{/if}}
 
-{Either way, this is my last email.|Either way, I won't keep filling your inbox.} All the best {{practiceWish}},
-{{senderFirstName}}`,
+{Either way, this is my last email.|Either way, I won't keep filling your inbox.} All the best {{practiceWish}}.
+
+${SIGN}${FOOTER}`,
       },
     ],
   },
@@ -125,7 +134,7 @@ Would that be worth 5 minutes of your time?
 
 ${SIGN}
 
-P.S. If this isn't relevant, just let me know and I won't follow up.`,
+P.S. If this isn't relevant, just let me know and I won't follow up.${FOOTER}`,
       },
       {
         type: 'FOLLOW_UP_1',
@@ -137,7 +146,7 @@ Happy to build the demo trained on {{companyName}}'s treatments so you can call 
 
 Shall I set it up?
 
-{{senderFirstName}}`,
+${SIGN}${FOOTER}`,
       },
       {
         type: 'FOLLOW_UP_2',
@@ -151,7 +160,7 @@ That's the gap we close. Every enquiry at {{companyName}} gets answered and book
 
 Open to a quick 10-minute call to see if it fits?
 
-{{senderFirstName}}`,
+${SIGN}${FOOTER}`,
       },
       {
         type: 'FOLLOW_UP_3',
@@ -163,8 +172,7 @@ I'll leave it here so I'm not crowding your inbox.
 
 If after-hours enquiries ever become something you want to fix at {{companyName}}, reply "demo" and I'll get one set up for you.
 
-All the best,
-${SIGN}`,
+${SIGN}${FOOTER}`,
       },
     ],
   },
@@ -191,7 +199,7 @@ Worth a look?
 
 ${SIGN}
 
-P.S. Wrong person? Just say, and I'll leave you be.`,
+P.S. Wrong person? Just say, and I'll leave you be.${FOOTER}`,
       },
       {
         type: 'FOLLOW_UP_1',
@@ -203,7 +211,7 @@ I can have a version trained on {{companyName}} ready tomorrow. Call it, say you
 
 Want me to set it up?
 
-{{senderFirstName}}`,
+${SIGN}${FOOTER}`,
       },
       {
         type: 'FOLLOW_UP_2',
@@ -217,7 +225,7 @@ Catching even one or two of those a month usually pays for this many times over,
 
 Open to a 10-minute call to see what it would catch for {{companyName}}?
 
-{{senderFirstName}}`,
+${SIGN}${FOOTER}`,
       },
       {
         type: 'FOLLOW_UP_3',
@@ -231,7 +239,7 @@ If missed calls ever become a problem worth fixing at {{companyName}}, reply "de
 
 Thanks, and good luck with the busy season.
 
-${SIGN}`,
+${SIGN}${FOOTER}`,
       },
     ],
   },
@@ -258,7 +266,7 @@ I can set up a version on your script so you can hear it call you. No cost, take
 
 Worth a look for {{companyName}}?
 
-${SIGN}`,
+${SIGN}${FOOTER}`,
       },
       {
         type: 'FOLLOW_UP_1',
@@ -270,7 +278,7 @@ Simplest test: send me a lead form, fill it in yourself, and our agent calls you
 
 Want me to set that up?
 
-{{senderFirstName}}`,
+${SIGN}${FOOTER}`,
       },
       {
         type: 'FOLLOW_UP_2',
@@ -284,7 +292,7 @@ Teams we work with typically see more booked appointments from the same ad spend
 
 Open to a quick 10-minute call to see what that looks like for {{companyName}}?
 
-{{senderFirstName}}`,
+${SIGN}${FOOTER}`,
       },
       {
         type: 'FOLLOW_UP_3',
@@ -296,8 +304,7 @@ I'll close the loop here.
 
 If speed-to-lead or after-hours coverage becomes a priority, reply "demo" and I'll build one on your script for you to test.
 
-All the best,
-${SIGN}`,
+${SIGN}${FOOTER}`,
       },
     ],
   },
@@ -326,7 +333,7 @@ Worth a look?
 
 ${SIGN}
 
-P.S. Not the right person? Just say, and I won't follow up.`,
+P.S. Not the right person? Just say, and I won't follow up.${FOOTER}`,
       },
       {
         type: 'FOLLOW_UP_1',
@@ -338,7 +345,7 @@ The easiest way to judge it is to hear it. I'll have a version trained on {{comp
 
 Want me to set it up?
 
-{{senderFirstName}}`,
+${SIGN}${FOOTER}`,
       },
       {
         type: 'FOLLOW_UP_2',
@@ -352,7 +359,7 @@ If even a couple of those a month turn into customers, the receptionist pays for
 
 Open to a 10-minute call to see what it would catch at {{companyName}}?
 
-{{senderFirstName}}`,
+${SIGN}${FOOTER}`,
       },
       {
         type: 'FOLLOW_UP_3',
@@ -364,9 +371,7 @@ I'll leave it here so I'm not filling your inbox.
 
 If missed calls ever become worth fixing at {{companyName}}, reply "demo" and I'll set one up for you to test.
 
-Thanks for your time.
-
-${SIGN}`,
+${SIGN}${FOOTER}`,
       },
     ],
   },
