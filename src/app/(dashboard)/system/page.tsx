@@ -20,7 +20,7 @@ interface Data {
   setup: SetupItem[]
   queues: { audience: { total: number }; finder: { total: number }; followUpsDue: number; followUpsOverdue: number }
   errors: Array<{ action: string; startedAt: string; error: string | null }>
-  scheduler: { url: string; header: string; secretSet: boolean }
+  scheduler: { url: string; autoUrl: string; header: string; secretSet: boolean }
 }
 
 const ACTION_LABEL: Record<string, string> = { tick: 'Send & replies', audience: 'Audience pipeline', finder: 'Lead Finder' }
@@ -55,7 +55,7 @@ export default function SystemPage() {
         <CardHeader className="pb-3">
           <CardTitle className="flex items-center gap-2">
             {healthy ? <CheckCircle2 className="h-4 w-4 text-emerald-600" /> : <CircleAlert className="h-4 w-4 text-amber-600" />}
-            Background worker {data && <span className="text-sm font-normal text-slate-500">· expected every 5 min ({data.worker.expectedPerDay} runs/day per action)</span>}
+            Background worker {data && <span className="text-sm font-normal text-slate-500">· sending expected every 5 min, research every 15 min</span>}
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -88,7 +88,7 @@ export default function SystemPage() {
             </div>
           )}
 
-          {!healthy && data && <SchedulerSetup url={data.scheduler.url} header={data.scheduler.header} />}
+          {!healthy && data && <SchedulerSetup autoUrl={data.scheduler.autoUrl} />}
         </CardContent>
       </Card>
 
@@ -165,25 +165,26 @@ function Queue({ label, value, warn }: { label: string; value?: number; warn?: b
   )
 }
 
-function SchedulerSetup({ url, header }: { url: string; header: string }) {
+function SchedulerSetup({ autoUrl }: { autoUrl: string }) {
   const copy = (t: string) => { navigator.clipboard.writeText(t).then(() => toast.success('Copied')).catch(() => null) }
+  if (!autoUrl) return (
+    <div className="rounded-lg border border-amber-200 bg-amber-50/60 p-4 text-sm text-amber-900">
+      WORKER_SECRET isn&apos;t set. Add it in Vercel → Settings → Environment Variables (any long random text), redeploy, then come back here.
+    </div>
+  )
   return (
     <div className="rounded-lg border border-amber-200 bg-amber-50/60 p-4 text-sm text-slate-700">
-      <p className="font-medium text-amber-900">The worker isn't running every 5 minutes. Set up a free scheduler (10 minutes):</p>
+      <p className="font-medium text-amber-900">Keep the worker on all the time: one free job, 2 minutes to set up.</p>
       <ol className="mt-2 list-decimal space-y-1.5 pl-5 text-[13px]">
-        <li>Create a free account at <a href="https://cron-job.org" target="_blank" rel="noreferrer" className="text-indigo-600 hover:underline">cron-job.org</a>.</li>
-        <li>Create <strong>three</strong> cron jobs, each running <strong>every 5 minutes</strong>, with these URLs:
-          <div className="mt-1 space-y-1">
-            {['tick', 'audience', 'finder'].map((a) => (
-              <button key={a} onClick={() => copy(`${url}?action=${a}`)} className="flex w-full items-center justify-between gap-2 rounded bg-white px-2 py-1 font-mono text-[11.5px] text-slate-700 hover:bg-slate-50">
-                {url}?action={a}<Copy className="h-3 w-3 shrink-0 text-slate-400" />
-              </button>
-            ))}
-          </div>
+        <li>Sign up free at <a href="https://console.cron-job.org/signup" target="_blank" rel="noreferrer" className="text-indigo-600 hover:underline">cron-job.org</a>.</li>
+        <li>Click <strong>Create cronjob</strong> and paste this URL (click to copy):
+          <button onClick={() => copy(autoUrl)} className="mt-1 flex w-full items-center justify-between gap-2 rounded bg-white px-2 py-1.5 text-left font-mono text-[11.5px] text-slate-700 hover:bg-slate-50">
+            <span className="break-all">{autoUrl}</span><Copy className="h-3 w-3 shrink-0 text-slate-400" />
+          </button>
         </li>
-        <li>In each job: <em>Advanced</em> → Request method <strong>POST</strong>, add a header <code className="rounded bg-white px-1">{header}</code> with your <code className="rounded bg-white px-1">WORKER_SECRET</code> value (from Vercel), and set the timeout to 60 s.</li>
-        <li>Save. Within 10 minutes the uptime above turns green. GitHub Actions keeps running as a backup.</li>
+        <li>Set it to run <strong>every 1 minute</strong> and click <strong>Create</strong>. Nothing else to change.</li>
       </ol>
+      <p className="mt-2 text-[12px] text-slate-500">Each call runs whatever is due (sending and replies every couple of minutes, Lead Finder and audience research every ~10). Within a few minutes the uptime above turns green. Keep this URL private: it contains your worker secret.</p>
     </div>
   )
 }

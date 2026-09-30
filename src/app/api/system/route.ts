@@ -34,7 +34,8 @@ export async function GET() {
   return NextResponse.json({
     worker, capacity, setup, errors: errors.map((e) => ({ ...e, error: e.error?.split('\n')[0] })),
     queues: { audience, finder, followUpsDue, followUpsOverdue },
-    scheduler: { url: `${appUrl}/api/worker`, header: 'X-Worker-Secret', secretSet: !!process.env.WORKER_SECRET },
+    // Admin-only route: the one URL to paste into a scheduler, secret included
+    scheduler: { url: `${appUrl}/api/worker`, autoUrl: process.env.WORKER_SECRET ? `${appUrl}/api/worker?action=auto&secret=${encodeURIComponent(process.env.WORKER_SECRET)}` : '', header: 'X-Worker-Secret', secretSet: !!process.env.WORKER_SECRET },
   })
 }
 

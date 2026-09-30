@@ -4,6 +4,8 @@ import type { Prisma } from '@prisma/client'
 import prisma from './prisma'
 
 export const EXPECTED_EVERY_MIN = 5
+/** Sending must run often; the research pipelines are fine every ~15 min */
+const EXPECTED_MIN: Record<string, number> = { tick: EXPECTED_EVERY_MIN, audience: 15, finder: 15 }
 
 export async function logRun<T>(action: string, source: string | null, fn: () => Promise<T>): Promise<T> {
   const started = Date.now()
@@ -44,7 +46,7 @@ export async function workerStats() {
     return {
       action: a,
       runs24h: mine.length,
-      uptime: Math.min(100, Math.round((100 * mine.length) / expected)),
+      uptime: Math.min(100, Math.round((100 * mine.length * EXPECTED_MIN[a]) / (24 * 60))),
       failures24h: mine.filter((r) => !r.ok).length,
       avgMs: mine.length ? Math.round(mine.reduce((n, r) => n + r.durationMs, 0) / mine.length) : 0,
       last: last && { at: last.startedAt, ok: last.ok, durationMs: last.durationMs, error: last.error?.split('\n')[0] || null, source: last.source, summary: last.summary },
