@@ -253,6 +253,13 @@ function LeadsPageInner() {
             </Button>
             <Button size="sm" variant="outline" onClick={() => handleBulkAction('pause_sequence')}>Pause Sequence</Button>
             <Button size="sm" variant="outline" onClick={() => handleBulkAction('resume_sequence')}>Resume</Button>
+            <Select onValueChange={(v) => handleBulkAction('assign_campaign', v === 'NONE' ? '' : v)}>
+              <SelectTrigger className="h-7 text-xs w-[160px]"><SelectValue placeholder="Move to campaign" /></SelectTrigger>
+              <SelectContent>
+                {(campaigns || []).map((c: { id: string; name: string }) => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+                <SelectItem value="NONE">No campaign</SelectItem>
+              </SelectContent>
+            </Select>
             <Select onValueChange={(v) => handleBulkAction('change_status', v)}>
               <SelectTrigger className="h-7 text-xs w-[140px]"><SelectValue placeholder="Change status" /></SelectTrigger>
               <SelectContent>

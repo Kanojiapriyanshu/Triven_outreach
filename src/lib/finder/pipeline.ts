@@ -368,8 +368,9 @@ export async function pushBusinesses(ids: string[], target: { campaignId?: strin
       await prisma.business.update({ where: { id: b.id }, data: { status: 'DO_NOT_CONTACT' } })
       skip('on the suppression list'); continue
     }
-    const dupe = await prisma.lead.findFirst({ where: { companyEmail: email.email }, select: { id: true } })
-    if (dupe) { skip('this email is already a lead'); continue }
+    // A lead with no campaign (e.g. imported from a Finder CSV) is picked up and attached, not skipped
+    const dupe = await prisma.lead.findFirst({ where: { companyEmail: email.email } })
+    if (dupe && (dupe.campaignId || dupe.businessId)) { skip(dupe.campaignId ? 'this email is already in a campaign' : 'this email is already a lead'); continue }
 
     let campaignId = target.campaignId
     if (!campaignId && target.byNiche) {
@@ -392,42 +393,50 @@ export async function pushBusinesses(ids: string[], target: { campaignId?: strin
       b.rating ? `${b.rating.toFixed(1)} stars from ${b.reviewCount} Google reviews.` : '',
       b.hours ? `Hours: ${b.hours}.` : '',
     ].filter(Boolean).join(' ')
-    const lead = await prisma.lead.create({
-      data: {
-        firstName: personal && first ? first : null,
-        lastName: personal && rest.length ? rest[rest.length - 1] : null,
-        fullName: owner || null,
-        jobTitle: b.ownerTitle,
-        companyName: b.name,
-        website: b.website,
-        companyEmail: email.email,
-        phone: b.phone,
-        linkedIn: b.linkedIn,
-        country: b.country,
-        state: b.state,
-        city: b.city,
-        industry: niche?.label || b.category,
-        subIndustry: b.category,
-        campaignId,
-        leadSource: b.source === 'OSM' ? 'OSM' : 'GOOGLE_MAPS',
-        status: 'READY_TO_CONTACT',
-        priority: b.tier === 'HOT' ? 'HIGH' : b.tier === 'WARM' ? 'MEDIUM' : 'LOW',
-        score: b.fitScore,
-        assignedUserId: userId,
-        whyThisLead: why,
-        personalizationNotes: [...b.siteFacts, owner && /^Dr/i.test(owner) ? owner : ''].filter(Boolean).join('. ') || null,
-        companyPainPoint: b.fitReasons.filter((r) => r.startsWith('+') && /voicemail|closes|days a week|keep up|urgent|complaints/.test(r)).map((r) => r.replace(/^\+\d+\s*/, '')).join('; ') || null,
-        researchSummary: `Fit ${b.fitScore}/100 (${b.tier.toLowerCase()}):\n${b.fitReasons.join('\n')}`,
-        websiteNotes: [b.techSignals.length ? `Tools on their site: ${b.techSignals.join(', ')}` : '', b.contactFormUrl ? `Contact form: ${b.contactFormUrl}` : ''].filter(Boolean).join('\n') || null,
-        socialMediaNotes: [b.mapsUrl, b.facebook, b.instagram, b.linkedIn].filter(Boolean).join('\n') || null,
+    const data = {
+      firstName: personal && first ? first : null,
+      lastName: personal && rest.length ? rest[rest.length - 1] : null,
+      fullName: owner || null,
+      jobTitle: b.ownerTitle,
+      companyName: b.name,
+      website: b.website,
+      companyEmail: email.email,
+      phone: b.phone,
+      linkedIn: b.linkedIn,
+      country: b.country,
+      state: b.state,
+      city: b.city,
+      industry: niche?.label || b.category,
+      subIndustry: b.category,
+      campaignId,
+      leadSource: b.source === 'OSM' ? 'OSM' : 'GOOGLE_MAPS',
+      status: 'READY_TO_CONTACT',
+      priority: b.tier === 'HOT' ? 'HIGH' : b.tier === 'WARM' ? 'MEDIUM' : 'LOW',
+      score: b.fitScore,
+      assignedUserId: userId,
+      whyThisLead: why,
+      personalizationNotes: [...b.siteFacts, owner && /^Dr/i.test(owner) ? owner : ''].filter(Boolean).join('. ') || null,
+      companyPainPoint: b.fitReasons.filter((r) => r.startsWith('+') && /voicemail|closes|days a week|keep up|urgent|complaints/.test(r)).map((r) => r.replace(/^\+\d+\s*/, '')).join('; ') || null,
+      researchSummary: `Fit ${b.fitScore}/100 (${b.tier.toLowerCase()}):\n${b.fitReasons.join('\n')}`,
+      websiteNotes: [b.techSignals.length ? `Tools on their site: ${b.techSignals.join(', ')}` : '', b.contactFormUrl ? `Contact form: ${b.contactFormUrl}` : ''].filter(Boolean).join('\n') || null,
+      socialMediaNotes: [b.mapsUrl, b.facebook, b.instagram, b.linkedIn].filter(Boolean).join('\n') || null,
         prospectingNotes: `Email from ${email.source.toLowerCase().replace('_', ' ')}, ${email.status.toLowerCase()}${email.verifyMethod ? ` (${email.verifyMethod.toLowerCase()})` : ''}${email.confidence ? `, confidence ${email.confidence}` : ''}${email.sourceUrl ? ` · ${email.sourceUrl}` : ''}`,
         businessId: b.id,
         sourcePlatform: b.source,
-      },
-    })
+    } satisfies Prisma.LeadUncheckedCreateInput
+    // Existing lead: join the campaign and fill only what it's missing, never overwrite what was imported
+    const lead = dupe
+      ? await prisma.lead.update({
+        where: { id: dupe.id },
+        data: {
+          ...Object.fromEntries(Object.entries(data).filter(([k, v]) => v != null && dupe[k as keyof typeof dupe] == null)),
+          campaignId, businessId: b.id,
+        },
+      })
+      : await prisma.lead.create({ data })
     await prisma.activity.create({
       data: {
-        leadId: lead.id, userId, type: 'NOTE_ADDED', title: `Added from Lead Finder (${b.source === 'OSM' ? 'OpenStreetMap' : 'Google Maps'})`,
+        leadId: lead.id, userId, type: 'NOTE_ADDED', title: `${dupe ? 'Linked to' : 'Added from'} Lead Finder (${b.source === 'OSM' ? 'OpenStreetMap' : 'Google Maps'})`,
         body: `${why}\n\nWhere the email came from:\n${b.searchLog || ''}`.slice(0, 4000),
         metadata: { businessId: b.id, mapsUrl: b.mapsUrl },
       },
