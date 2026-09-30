@@ -55,7 +55,7 @@ export default function SystemPage() {
         <CardHeader className="pb-3">
           <CardTitle className="flex items-center gap-2">
             {healthy ? <CheckCircle2 className="h-4 w-4 text-emerald-600" /> : <CircleAlert className="h-4 w-4 text-amber-600" />}
-            Background worker {data && <span className="text-sm font-normal text-slate-500">· sending expected every 5 min, research every 15 min</span>}
+            Background worker {data && <span className="text-sm font-normal text-slate-500">· every 2 min during sending hours, every 10 min outside them</span>}
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -77,11 +77,11 @@ export default function SystemPage() {
           {/* Runs per hour (send & replies) */}
           {data && (
             <div>
-              <p className="mb-1 text-xs text-slate-500">Send & replies runs per hour, last 24 h (12 = on time)</p>
+              <p className="mb-1 text-xs text-slate-500">Send & replies runs per hour, last 24 h (6+ = on time; ~30 during sending hours)</p>
               <div className="flex h-16 items-end gap-[2px] border-b border-slate-200">
                 {data.worker.hours.map((h) => (
                   <div key={h.hour} className="flex h-full flex-1 items-end" title={`${new Date(h.hour).toLocaleString('en-US', { hour: 'numeric', day: 'numeric', month: 'short' })}: ${h.tick} runs`}>
-                    <div className={`w-full rounded-t-[3px] ${h.tick >= 10 ? 'bg-emerald-400' : h.tick > 0 ? 'bg-amber-400' : 'bg-slate-200'}`} style={{ height: `${Math.max(h.tick ? 6 : 3, (100 * h.tick) / maxHour)}%` }} />
+                    <div className={`w-full rounded-t-[3px] ${h.tick >= 5 ? 'bg-emerald-400' : h.tick > 0 ? 'bg-amber-400' : 'bg-slate-200'}`} style={{ height: `${Math.max(h.tick ? 6 : 3, (100 * h.tick) / maxHour)}%` }} />
                   </div>
                 ))}
               </div>
@@ -184,7 +184,7 @@ function SchedulerSetup({ autoUrl }: { autoUrl: string }) {
         </li>
         <li>Set it to run <strong>every 1 minute</strong> and click <strong>Create</strong>. Nothing else to change.</li>
       </ol>
-      <p className="mt-2 text-[12px] text-slate-500">Each call runs whatever is due (sending and replies every couple of minutes, Lead Finder and audience research every ~10). Within a few minutes the uptime above turns green. Keep this URL private: it contains your worker secret.</p>
+      <p className="mt-2 text-[12px] text-slate-500">Each call runs whatever is due: during sending hours, sending and replies every 2 minutes and research every 10; outside them, 5 times less often. Within a few minutes the uptime above turns green. Keep this URL private: it contains your worker secret.</p>
     </div>
   )
 }

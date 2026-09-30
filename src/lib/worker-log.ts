@@ -4,8 +4,8 @@ import type { Prisma } from '@prisma/client'
 import prisma from './prisma'
 
 export const EXPECTED_EVERY_MIN = 5
-/** Sending must run often; the research pipelines are fine every ~15 min */
-const EXPECTED_MIN: Record<string, number> = { tick: EXPECTED_EVERY_MIN, audience: 15, finder: 15 }
+/** The auto scheduler slows down outside sending hours (sending every 10 min, research every ~50) */
+const EXPECTED_MIN: Record<string, number> = { tick: 10, audience: 30, finder: 30 }
 
 export async function logRun<T>(action: string, source: string | null, fn: () => Promise<T>): Promise<T> {
   const started = Date.now()

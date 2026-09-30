@@ -6,7 +6,8 @@
  *
  * Action (body { action } or ?action=):
  *   auto     = the one URL a scheduler needs, called every minute: runs whichever job below is most
- *              overdue, after answering, so the scheduler gets an instant 200 and never times out
+ *              overdue, after answering, so the scheduler gets an instant 200 and never times out.
+ *              Full speed during sending hours, 5x slower outside them
  *   tick     = check replies, then let every free inbox send; hourly health alerts
  *   audience = audience pipeline (refill sources → collect → review → research → verify → route)
  *   finder   = Lead Finder (continue business searches, research websites for emails)
@@ -14,6 +15,10 @@
  */
 import { NextRequest, NextResponse, after } from 'next/server'
 import prisma from '@/lib/prisma'
+import { getSettings } from '@/lib/settings'
+import { campaignSchedule } from '@/lib/schedule'
+import { isInSendWindow } from '@/lib/send-window'
+import { recipientWindow } from '@/lib/recipient-time'
 import { checkAllReplies } from '@/lib/replies'
 import { runSequencer } from '@/lib/sequencer'
 import { runAudiencePipeline } from '@/lib/audience/pipeline'
@@ -31,16 +36,36 @@ function isAuthorized(req: NextRequest) {
   return !!secret && !!process.env.WORKER_SECRET && secret === process.env.WORKER_SECRET
 }
 
-/** How often each job should run (minutes); "auto" picks the one furthest past its interval */
+/**
+ * How often each job runs (minutes) during sending hours; outside them everything runs 5x less
+ * often (replies still checked every 10 min). "auto" runs the job furthest past its interval, or nothing.
+ */
 const EVERY: Record<string, number> = { tick: 2, audience: 10, finder: 10 }
+const OFF_HOURS_SLOWDOWN = 5
 
-async function mostOverdue() {
+async function mostOverdue(slowdown: number) {
   const last = await prisma.workerRun.groupBy({ by: ['action'], where: { action: { in: Object.keys(EVERY) } }, _max: { startedAt: true } })
   const overdue = (a: string) => {
     const at = last.find((l) => l.action === a)?._max.startedAt
-    return at ? (Date.now() - at.getTime()) / 60_000 / EVERY[a] : Infinity
+    return at ? (Date.now() - at.getTime()) / 60_000 / (EVERY[a] * slowdown) : Infinity
   }
-  return Object.keys(EVERY).sort((a, b) => overdue(b) - overdue(a))[0]
+  const next = Object.keys(EVERY).sort((a, b) => overdue(b) - overdue(a))[0]
+  return overdue(next) >= 1 ? next : null
+}
+
+/** Can a live campaign send now, or within 30 min? Recipient-hours campaigns use their leads' business hours. */
+async function isSendingTime() {
+  const [settings, campaigns] = await Promise.all([getSettings(), prisma.campaign.findMany({ where: { sendingStatus: 'ACTIVE' } })])
+  const moments = [new Date(), new Date(Date.now() + 30 * 60_000)]
+  for (const c of campaigns) {
+    const own = campaignSchedule(c, settings).window
+    const windows = c.recipientHours
+      ? (await prisma.lead.findMany({ where: { campaignId: c.id, hasReplied: false }, distinct: ['country', 'state'], select: { country: true, state: true } }))
+        .map((l) => recipientWindow(l.country, l.state) || own)
+      : [own]
+    if (windows.some((w) => moments.some((m) => isInSendWindow(m, w)))) return true
+  }
+  return false
 }
 
 async function handle(req: NextRequest) {
@@ -53,9 +78,10 @@ async function handle(req: NextRequest) {
   const processedAt = new Date().toISOString()
 
   if (action === 'auto') {
-    const next = await mostOverdue()
-    after(() => run(next, source, started).catch(() => null))
-    return NextResponse.json({ ok: true, action, running: next, processedAt })
+    const sendingTime = await isSendingTime()
+    const next = await mostOverdue(sendingTime ? 1 : OFF_HOURS_SLOWDOWN)
+    if (next) after(() => run(next, source, started).catch(() => null))
+    return NextResponse.json({ ok: true, action, sendingTime, running: next, processedAt })
   }
 
   try {
