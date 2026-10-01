@@ -110,7 +110,7 @@ export async function findBusinessEmail(p: { firstName?: string | null; lastName
       if (found) return { found, notes: [...notes, `${step.name}: ${found.email}`], outOfCredits }
       notes.push(`${step.name}: no match`)
     } catch (err) {
-      notes.push(err instanceof NoKeyError ? `${step.name}: skipped, no credits left on any key` : `${step.name}: ${(err as Error).message}`)
+      notes.push(err instanceof NoKeyError ? `${step.name}: skipped for now (rate limit or no credits left)` : `${step.name}: ${(err as Error).message}`)
     }
   }
   if (domain && useHunter && !hunterHasData) notes.push('Skipped Hunter lookups to save credits (no data for this domain)')

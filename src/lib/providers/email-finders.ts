@@ -18,21 +18,39 @@ function status(v?: string | null): EmailStatus {
 
 interface TombaEmail { email?: string | null; type?: string; first_name?: string | null; last_name?: string | null; full_name?: string | null; position?: string | null; score?: number; verification?: { status?: string | null } | null }
 
-async function tomba<T>(path: string, params: Record<string, string>) {
+// Tomba's free plan allows one request a second: calls line up behind this gate, and a
+// "too fast" answer is retried once instead of parking the key
+let tombaGate: Promise<unknown> = Promise.resolve()
+const wait = (ms: number) => new Promise((r) => setTimeout(r, ms))
+function tombaTurn() {
+  const turn = tombaGate
+  tombaGate = turn.then(() => wait(1_200))
+  return turn
+}
+
+/** `found` says whether the answer held an address: Tomba only charges a search that finds one */
+async function tomba<T>(path: string, params: Record<string, string>, found: (d: T) => boolean) {
   return withKey('tomba', async (pair) => {
     const [key, secret] = pair.split(':')
     if (!secret) throw rejection(401, 'Tomba needs key:secret (ta_…:ts_…)')!
-    const res = await fetch(`https://api.tomba.io/v1/${path}?${new URLSearchParams(params)}`, {
-      headers: { 'X-Tomba-Key': key, 'X-Tomba-Secret': secret, Accept: 'application/json' },
-      signal: AbortSignal.timeout(20_000), cache: 'no-store',
-    })
-    const body = await res.json().catch(() => ({})) as { data?: T; errors?: { message?: string; type?: string } }
-    if (res.ok) return body.data ?? null
-    const rejected = rejection(res.status, body.errors?.message || body.errors?.type || '')
-    if (rejected) throw rejected
-    if (res.status === 400 || res.status === 404 || res.status === 422 || res.status === 451) return null // unknown or webmail domain: nothing to find
-    throw new Error(`Tomba ${path}: ${body.errors?.message || `HTTP ${res.status}`}`)
-  })
+    for (let attempt = 0; ; attempt++) {
+      await tombaTurn()
+      const res = await fetch(`https://api.tomba.io/v1/${path}?${new URLSearchParams(params)}`, {
+        headers: { 'X-Tomba-Key': key, 'X-Tomba-Secret': secret, Accept: 'application/json' },
+        signal: AbortSignal.timeout(20_000), cache: 'no-store',
+      })
+      const body = await res.json().catch(() => ({})) as { data?: T; errors?: { message?: string; type?: string } }
+      if (res.ok) return body.data ?? null
+      if (res.status === 429 && /rps|per second/i.test(body.errors?.message || '') && attempt < 2) { await wait(1_500); continue }
+      const rejected = rejection(res.status, body.errors?.message || body.errors?.type || '')
+      // Per-minute limit (2 searches a minute on the free plan): rest the key exactly as long as Tomba asks
+      const retry = Number(body.errors?.message?.match(/retry after (\d+) seconds?/i)?.[1])
+      if (rejected?.kind === 'rate' && retry) rejected.until = new Date(Date.now() + (retry + 1) * 1000)
+      if (rejected) throw rejected
+      if (res.status === 400 || res.status === 404 || res.status === 422 || res.status === 451) return null // unknown or webmail domain: nothing to find
+      throw new Error(`Tomba ${path}: ${body.errors?.message || `HTTP ${res.status}`}`)
+    }
+  }, { charge: (d) => (d && found(d) ? 1 : 0) })
 }
 
 function tombaHit(e: TombaEmail, how: string, domain?: string): FinderHit | null {
@@ -49,13 +67,13 @@ function tombaHit(e: TombaEmail, how: string, domain?: string): FinderHit | null
 /** Email of a named person at a domain */
 export async function tombaFindEmail(q: { domain?: string; first?: string; last?: string }) {
   if (!q.domain || !q.first || !q.last) return null
-  const d = await tomba<TombaEmail>('email-finder', { domain: q.domain, first_name: q.first, last_name: q.last })
+  const d = await tomba<TombaEmail>('email-finder', { domain: q.domain, first_name: q.first, last_name: q.last }, (x) => !!x.email)
   return d ? tombaHit(d, 'match', q.domain) : null
 }
 
 /** No name: the decision maker Tomba knows at a small company's domain, else its best address */
 export async function tombaDomainOwner(domain: string) {
-  const d = await tomba<{ emails?: TombaEmail[] }>('domain-search', { domain, limit: '10' })
+  const d = await tomba<{ emails?: TombaEmail[] }>('domain-search', { domain, limit: '10' }, (x) => !!x.emails?.length)
   const emails = d?.emails || []
   const pick = emails.find((e) => e.type === 'personal' && OWNER.test(e.position || ''))
     || (emails.length <= 3 ? [...emails].sort((a, b) => (b.score || 0) - (a.score || 0))[0] : undefined)
