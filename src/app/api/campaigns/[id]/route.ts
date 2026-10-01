@@ -78,6 +78,12 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     if (!checkedAt || (lastEdit && lastEdit.updatedAt > checkedAt)) {
       return NextResponse.json({ error: 'Review the sample emails before launching.', code: 'NEEDS_REVIEW' }, { status: 409 })
     }
+    // Resuming after a bounce pause: the list has been cleaned, so the bounce guard counts from now.
+    // Otherwise the same old bounces would pause it again within the hour
+    if (/bounce/i.test(current.pausedReason || '')) {
+      const key = `bounce_guard:${id}`, value = new Date().toISOString()
+      await prisma.setting.upsert({ where: { key }, create: { key, value }, update: { value } })
+    }
     ;(rest as Record<string, unknown>).pausedReason = null
     if (!current.launchedAt) (rest as Record<string, unknown>).launchedAt = new Date()
   }

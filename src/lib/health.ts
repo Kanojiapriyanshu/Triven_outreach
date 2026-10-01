@@ -47,12 +47,16 @@ export async function checkHealth(force = false) {
 
   // 2b. A campaign bouncing over 3% (30+ sends in 7 days) pauses itself
   for (const c of await prisma.campaign.findMany({ where: { sendingStatus: 'ACTIVE' }, select: { id: true, name: true } })) {
+    // Counted from the last resume after a bounce pause (if any), so a cleaned-up campaign gets a fresh start
+    const resumed = await prisma.setting.findUnique({ where: { key: `bounce_guard:${c.id}` } })
+    const since = resumed && new Date(resumed.value) > weekAgo ? new Date(resumed.value) : weekAgo
     const [cs, cb] = await Promise.all([
-      prisma.lead.count({ where: { campaignId: c.id, firstEmailSentAt: { gte: weekAgo } } }),
-      prisma.lead.count({ where: { campaignId: c.id, firstEmailSentAt: { gte: weekAgo }, status: 'INVALID_EMAIL' } }),
+      prisma.lead.count({ where: { campaignId: c.id, firstEmailSentAt: { gte: since } } }),
+      prisma.lead.count({ where: { campaignId: c.id, firstEmailSentAt: { gte: since }, status: 'INVALID_EMAIL' } }),
     ])
-    if (cs >= 30 && cb / cs > 0.03) {
-      const reason = `${(100 * cb / cs).toFixed(1)}% bounce rate in 7 days`
+    // 30+ sends over 3%, or (so a bad batch is caught early) 4 bounces in the first 20
+    if ((cs >= 30 && cb / cs > 0.03) || (cs < 30 && cb >= 4)) {
+      const reason = `${(100 * cb / cs).toFixed(1)}% bounce rate ${since > weekAgo ? 'since it was resumed' : 'in 7 days'}`
       await prisma.campaign.update({ where: { id: c.id }, data: { sendingStatus: 'PAUSED', pausedReason: reason } })
       await notify({ type: 'BOUNCE', title: `${c.name} paused: ${reason}`, body: 'Tighten the email rules (verified only) or clean the list, then resume.', href: '/campaigns', group: `camp-bounce:${c.id}`, cooldownHours: 24 })
       raised.push(`paused:${c.name}`)
