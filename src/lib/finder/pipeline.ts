@@ -8,7 +8,11 @@
 //   status   → READY when there's an address we're allowed to use
 import type { Business, BusinessEmail, LeadSearch, Prisma } from '@prisma/client'
 import prisma from '../prisma'
-import { googleTextSearch, osmSearch, formatHours, hoursFacts, PlacesError, type PlaceResult } from './places'
+import { formatHours, hoursFacts, PlacesError, type PlaceResult } from './places'
+import { searchSource, sourcesFor, PAGE_SIZE, SOURCE_LABEL, type SourceId, type SourcePage } from './sources'
+import { NoKeyError } from '../providers/keys'
+import { searchProvider } from '../audience/identity'
+import { budgetLeft } from '../budget'
 import { nicheOf, CHAIN_NAMES, type Niche } from './niches'
 import { getFinderSettings, type FinderSettings } from './settings'
 import { researchBusiness, ownDomain } from './research'
@@ -21,7 +25,7 @@ const left = (deadline: number) => deadline - Date.now()
 
 // ─── 1. Search ───────────────────────────────────────────────────────────────
 
-interface Cursor { loc: number; token?: string | null; pages?: number; retries?: number }
+interface Cursor { loc: number; src?: number; sources?: SourceId[]; token?: string | null; pages?: number; retries?: number }
 
 /** Run (or continue) one search until it's done or the time is up */
 export async function runSearch(searchId: string, deadline: number) {
@@ -31,42 +35,53 @@ export async function runSearch(searchId: string, deadline: number) {
   const niche = nicheOf(search.niche)
   const cursor: Cursor = (search.cursor as unknown as Cursor) || { loc: 0 }
   const locations = search.locations.length ? search.locations : ['']
+  const auto = search.provider === 'AUTO'
+  // "All sources": the list is fixed when the search starts, so paging stays stable between runs
+  cursor.sources ||= auto ? await sourcesFor(niche, search.country) : [search.provider as SourceId]
   await prisma.leadSearch.update({ where: { id: search.id }, data: { status: 'RUNNING', startedAt: search.startedAt || new Date() } })
 
   const counts = { found: 0, added: 0, duplicates: 0, filtered: 0, apiCalls: 0 }
+  const skipped: string[] = []
   let error: string | null = null
   let fatal = false
+  const nextSource = () => {
+    cursor.src = (cursor.src || 0) + 1; cursor.token = null; cursor.pages = 0
+    if (cursor.src >= cursor.sources!.length) { cursor.loc++; cursor.src = 0 }
+  }
   try {
+    if (!cursor.sources.length) throw new PlacesError('No business source is available right now: every key is used up for this period', 'CAP')
     while (cursor.loc < locations.length && left(deadline) > 12_000) {
-      const location = locations[cursor.loc]
-      let places: PlaceResult[] = []
-      let next: string | null = null
-      if (search.provider === 'OSM') {
-        // No ranking on OSM: the ones we can actually reach (site / email / phone) first
-        const all = await osmSearch(niche?.osm || [], location, search.country, Math.min(search.maxPerPlace * 4, 400))
-        const reach = (p: PlaceResult) => (p.email ? 4 : 0) + (p.website ? 2 : 0) + (p.phone ? 1 : 0)
-        places = all.sort((a, b) => reach(b) - reach(a)).slice(0, search.maxPerPlace)
-        counts.apiCalls++
-      } else {
-        const res = await googleTextSearch(`${search.query}${location ? ` in ${location}` : ''}`, { pageToken: cursor.token, regionCode: search.country })
-        counts.apiCalls++
-        places = res.places
-        next = res.nextPageToken
+      const source: SourceId = cursor.sources[cursor.src || 0]
+      let page: SourcePage
+      try {
+        page = await searchSource(source, { query: search.query, niche, location: locations[cursor.loc], country: search.country, token: cursor.token, max: search.maxPerPlace })
+      } catch (err) {
+        if (!auto) throw err
+        // One source failing never stops the others. Out of credits or a bad key: drop it for the
+        // rest of this search; anything else (busy server, unknown place): skip it for this location
+        skipped.push(`${SOURCE_LABEL[source]}: ${(err as Error).message}`.slice(0, 160))
+        const dead = err instanceof NoKeyError || (err instanceof PlacesError && !!err.code)
+        if (dead && cursor.sources.length > 1) {
+          cursor.sources = cursor.sources.filter((x) => x !== source); cursor.token = null; cursor.pages = 0
+          if ((cursor.src || 0) >= cursor.sources.length) { cursor.loc++; cursor.src = 0 }
+        } else nextSource()
+        continue
       }
+      counts.apiCalls++
+      const places = page.places.slice(0, Math.max(search.maxPerPlace, 20))
       counts.found += places.length
       const r = await savePlaces(places, search, niche, s)
       counts.added += r.added; counts.duplicates += r.duplicates; counts.filtered += r.filtered
 
       cursor.pages = (cursor.pages || 0) + 1
-      const perPage = search.provider === 'OSM' ? Infinity : 20
-      if (next && cursor.pages * perPage < search.maxPerPlace) cursor.token = next
-      else { cursor.loc++; cursor.token = null; cursor.pages = 0 }
+      if (page.next && cursor.pages * PAGE_SIZE[source] < search.maxPerPlace) cursor.token = page.next
+      else nextSource()
     }
   } catch (err) {
     error = (err as Error).message
     // Busy servers and timeouts get retried on the next run; a missing key or the monthly cap don't
     cursor.retries = (cursor.retries || 0) + 1
-    fatal = (err instanceof PlacesError && (err.code === 'CAP' || err.code === 'KEY')) || cursor.retries > 3
+    fatal = (err instanceof PlacesError && (err.code === 'CAP' || err.code === 'KEY')) || err instanceof NoKeyError || cursor.retries > 3
     if (err instanceof PlacesError && err.code === 'CAP') {
       await notify({ type: 'QUOTA', title: 'Google monthly cap reached', body: error, href: '/finder?settings=1', group: 'google-cap', cooldownHours: 24 })
     }
@@ -80,7 +95,8 @@ export async function runSearch(searchId: string, deadline: number) {
       found: { increment: counts.found }, added: { increment: counts.added }, duplicates: { increment: counts.duplicates },
       filtered: { increment: counts.filtered }, apiCalls: { increment: counts.apiCalls },
       status: fatal ? 'ERROR' : done ? 'DONE' : 'RUNNING',
-      lastError: error, finishedAt: done || fatal ? new Date() : null,
+      lastError: error || (skipped.length ? `Skipped: ${[...new Set(skipped)].join(' · ')}`.slice(0, 500) : search.lastError),
+      finishedAt: done || fatal ? new Date() : null,
     },
   })
   if (done && !error) {
@@ -94,11 +110,26 @@ export async function runSearch(searchId: string, deadline: number) {
   return updated
 }
 
+// Words too common to prove a listing is on-niche
+const GENERIC_WORD = /^(clinic|clinics|service|services|company|contractor|agency|agencies|firm|firms|shop|repair|care|center|studio|store|office|house|general|local)$/
+
 function nicheMatch(p: PlaceResult, niche: Niche | null) {
   if (!niche) return true
-  if (p.source === 'OSM') return true // the tags already are the niche
-  return p.types.some((t) => niche.types.includes(t)) || !!niche.nameHint?.test(p.name)
+  if (p.source === 'OSM' || p.source === 'NPI') return true // the tags / taxonomy already are the niche
+  if (p.source === 'GOOGLE') return p.types.some((t) => niche.types.includes(t)) || !!niche.nameHint?.test(p.name)
+  // TomTom / Foursquare: their own category names, matched on the niche's distinctive words ("dentist", "plumb")
+  const words = [niche.query, niche.label, ...niche.types.map((t) => t.replace(/_/g, ' '))]
+    .flatMap((w) => w.toLowerCase().split(/[^a-z]+/)).filter((w) => w.length > 3 && !GENERIC_WORD.test(w)).map((w) => w.replace(/(ists?|ers?|ing|s)$/, ''))
+  return p.types.some((t) => words.some((w) => w.length > 3 && t.includes(w))) || !!niche.nameHint?.test(p.name)
 }
+
+// The same business arrives from several sources under different ids: match on phone, on
+// website + city, or on name + city, and fill the gaps of the record we already have.
+const phoneKey = (p?: string | null) => { const d = (p || '').replace(/\D/g, ''); return d.length >= 10 ? d.slice(-10) : '' }
+const nameKey = (n: string) => n.toLowerCase().replace(/&/g, ' and ').replace(/\b(llc|inc|pllc|pc|pa|ltd|co|corp|dds|dmd|the|and|of)\b/g, ' ').replace(/[^a-z0-9]/g, '')
+const cityKey = (c?: string | null) => (c || '').toLowerCase().replace(/[^a-z]/g, '')
+
+type Known = Pick<Business, 'id' | 'name' | 'phone' | 'domain' | 'website' | 'city' | 'ownerName' | 'status' | 'rating' | 'hours' | 'notes' | 'facebook' | 'instagram'>
 
 async function savePlaces(places: PlaceResult[], search: LeadSearch, niche: Niche | null, s: FinderSettings) {
   const out = { added: 0, duplicates: 0, filtered: 0 }
@@ -108,6 +139,23 @@ async function savePlaces(places: PlaceResult[], search: LeadSearch, niche: Nich
   const domainCount = new Map<string, number>()
   for (const p of places) { const d = ownDomain(p.website); if (d) domainCount.set(d, (domainCount.get(d) || 0) + 1) }
 
+  // Businesses we already hold that could be the same place
+  const domains = [...new Set(places.map((p) => ownDomain(p.website)).filter(Boolean))]
+  const cities = [...new Set(places.map((p) => p.city).filter(Boolean))] as string[]
+  const nearby: Known[] = domains.length || cities.length ? await prisma.business.findMany({
+    where: { OR: [...(domains.length ? [{ domain: { in: domains } }] : []), ...(cities.length ? [{ city: { in: cities, mode: 'insensitive' as const } }] : [])] },
+    select: { id: true, name: true, phone: true, domain: true, website: true, city: true, ownerName: true, status: true, rating: true, hours: true, notes: true, facebook: true, instagram: true },
+    take: 8000,
+  }) : []
+  const byPhone = new Map<string, Known>(), bySite = new Map<string, Known>(), byName = new Map<string, Known>()
+  const index = (b: Known) => {
+    const c = cityKey(b.city)
+    if (phoneKey(b.phone)) byPhone.set(phoneKey(b.phone), b)
+    if (b.domain && c) bySite.set(`${b.domain}|${c}`, b)
+    if (c && nameKey(b.name).length > 4) byName.set(`${nameKey(b.name)}|${c}`, b)
+  }
+  nearby.forEach(index)
+
   for (const p of places) {
     if (known.has(p.placeId)) { out.duplicates++; continue }
     if (!nicheMatch(p, niche)) { out.filtered++; continue }
@@ -115,10 +163,37 @@ async function savePlaces(places: PlaceResult[], search: LeadSearch, niche: Nich
     if (s.minReviews && p.rating !== undefined && (p.reviewCount || 0) < s.minReviews) { out.filtered++; continue }
     if (s.minRating && p.rating !== undefined && p.rating < s.minRating) { out.filtered++; continue }
     const domain = ownDomain(p.website)
+    const facts = hoursFacts(p.hours)
+
+    const c = cityKey(p.city)
+    const same = byPhone.get(phoneKey(p.phone)) || (domain && c ? bySite.get(`${domain}|${c}`) : undefined) || (c ? byName.get(`${nameKey(p.name)}|${c}`) : undefined)
+    if (same) {
+      // Fill what the record we hold is missing; a newly learned website or email reopens research
+      const gotSite = !same.website && !!p.website
+      const gotEmail = !!p.email && !same.notes?.startsWith('listing-email:')
+      const fill: Prisma.BusinessUpdateInput = {
+        ...(gotSite ? { website: p.website, domain: domain || hostOf(p.website!) } : {}),
+        ...(!same.phone && p.phone ? { phone: p.phone } : {}),
+        ...(!same.ownerName && p.ownerName ? { ownerName: p.ownerName, ownerTitle: p.ownerTitle || null, ownerSource: SOURCE_LABEL[p.source] } : {}),
+        ...(same.rating == null && p.rating !== undefined ? { rating: p.rating, reviewCount: p.reviewCount || 0 } : {}),
+        ...(!same.hours && p.hours ? { hours: formatHours(p.hours), openDays: facts.openDays, closesAt: facts.closesAt } : {}),
+        ...(!same.facebook && p.facebook ? { facebook: p.facebook } : {}),
+        ...(!same.instagram && p.instagram ? { instagram: p.instagram } : {}),
+        ...(gotEmail ? { notes: `listing-email:${p.email}` } : {}),
+        ...((gotSite || gotEmail) && ['NO_EMAIL', 'NEW'].includes(same.status) ? { enrichedAt: null, enrichAttempts: 0, status: 'NEW' } : {}),
+      }
+      if (Object.keys(fill).length) {
+        await prisma.business.update({ where: { id: same.id }, data: fill })
+        Object.assign(same, { website: same.website || p.website, phone: same.phone || p.phone, ownerName: same.ownerName || p.ownerName })
+        await rescore(same.id, s)
+      }
+      out.duplicates++
+      continue
+    }
+
     const isChain = CHAIN_NAMES.test(p.name) || (!!domain && (domainCount.get(domain) || 0) >= 3)
     if (isChain && s.excludeChains) { out.filtered++; continue }
 
-    const facts = hoursFacts(p.hours)
     const data: Prisma.BusinessCreateInput = {
       placeId: p.placeId, source: p.source, search: { connect: { id: search.id } },
       name: p.name.slice(0, 200), niche: niche?.id || null, category: p.category || niche?.label || null, types: p.types.slice(0, 12),
@@ -127,10 +202,12 @@ async function savePlaces(places: PlaceResult[], search: LeadSearch, niche: Nich
       rating: p.rating, reviewCount: p.reviewCount || 0, businessStatus: p.businessStatus,
       hours: formatHours(p.hours), openDays: facts.openDays, closesAt: facts.closesAt,
       facebook: p.facebook, instagram: p.instagram, isChain,
+      ownerName: p.ownerName, ownerTitle: p.ownerTitle, ownerSource: p.ownerName ? SOURCE_LABEL[p.source] : null,
       notes: p.email ? `listing-email:${p.email}` : null,
     }
     const created = await prisma.business.create({ data }).catch(() => null) // lost a race with a parallel search
     if (!created) { out.duplicates++; continue }
+    index(created)
     await rescore(created.id, s)
     out.added++
   }
@@ -144,10 +221,13 @@ const RESEARCH_BATCH = 8
 export async function researchBatch(deadline: number, onlyIds?: string[]) {
   const s = await getFinderSettings()
   const out = { researched: 0, ready: 0, emails: 0, errors: [] as string[] }
+  // Listings without a website need a web search to find it: when today's search budget is
+  // gone they wait for tomorrow instead of being written off as "no email"
+  const waitForSearch = s.useWebSearch && !!searchProvider() && !(await budgetLeft('search'))
   const batch = await prisma.business.findMany({
     where: onlyIds
       ? { id: { in: onlyIds }, status: { notIn: ['DO_NOT_CONTACT', 'IN_CAMPAIGN'] } }
-      : { enrichedAt: null, status: { in: ['NEW'] }, enrichAttempts: { lt: 2 } },
+      : { enrichedAt: null, status: { in: ['NEW'] }, enrichAttempts: { lt: 2 }, ...(waitForSearch ? { website: { not: null } } : {}) },
     orderBy: [{ fitScore: 'desc' }, { createdAt: 'asc' }],
     take: onlyIds ? Math.min(onlyIds.length, 25) : RESEARCH_BATCH,
   })
@@ -185,7 +265,12 @@ export async function researchBatch(deadline: number, onlyIds?: string[]) {
 async function researchOne(b: Business, s: FinderSettings, deadline: number) {
   const niche = nicheOf(b.niche)
   const listingEmail = b.notes?.match(/^listing-email:(\S+)/)?.[1] || null
-  const r = await researchBusiness({ name: b.name, website: b.website, city: b.city, country: b.country, ownerName: b.ownerName, listingEmail }, niche, s, deadline)
+  const r = await researchBusiness({ name: b.name, website: b.website, city: b.city, state: b.state, country: b.country, ownerName: b.ownerName, listingEmail }, niche, s, deadline)
+
+  if (r.deferred && !r.emails.length) {
+    await prisma.business.update({ where: { id: b.id }, data: { status: 'NEW', enrichAttempts: { decrement: 1 }, searchLog: r.log.join('\n') } })
+    return false
+  }
 
   const existing = new Set((await prisma.businessEmail.findMany({ where: { businessId: b.id }, select: { email: true } })).map((e) => e.email))
   const fresh = r.emails.filter((e) => !existing.has(e.email))
@@ -211,6 +296,7 @@ async function researchOne(b: Business, s: FinderSettings, deadline: number) {
     where: { id: b.id },
     data: {
       phone: b.phone || r.phone || null,
+      ...(!b.website && r.website ? { website: r.website, domain: ownDomain(r.website) || hostOf(r.website) } : {}),
       contactFormUrl: r.contactFormUrl || b.contactFormUrl,
       facebook: b.facebook || r.facebook || null,
       instagram: b.instagram || r.instagram || null,
@@ -231,6 +317,7 @@ async function researchOne(b: Business, s: FinderSettings, deadline: number) {
 // ─── 3. Score & status ───────────────────────────────────────────────────────
 
 const PUBLISHED = ['LISTING', 'WEBSITE', 'SEARCH', 'MANUAL']
+const FINDERS = ['HUNTER', 'APOLLO', 'TOMBA', 'PROSPEO']
 
 /** May we email this address under the Lead Finder's policy? */
 export function isSendable(e: Pick<BusinessEmail, 'status' | 'source' | 'verifyMethod' | 'confidence'>, s: FinderSettings) {
@@ -239,7 +326,7 @@ export function isSendable(e: Pick<BusinessEmail, 'status' | 'source' | 'verifyM
   if (s.sendPolicy !== 'VERIFIED_OR_PUBLISHED' || !e.verifyMethod) return false
   // Published by the business itself (its site, its listing): fine even on catch-all domains
   if (PUBLISHED.includes(e.source)) return true
-  return e.source === 'HUNTER' && e.status === 'UNKNOWN' && (e.confidence || 0) >= 90
+  return FINDERS.includes(e.source) && e.status === 'UNKNOWN' && (e.confidence || 0) >= 90
 }
 
 /** Best address: the owner's own > a verified personal one > a verified role inbox > published */
@@ -389,7 +476,7 @@ export async function pushBusinesses(ids: string[], target: { campaignId?: strin
     const [first, ...rest] = plainOwner.split(/\s+/)
     const where = [b.city, b.state].filter(Boolean).join(', ')
     const why = [
-      `Found on ${b.source === 'OSM' ? 'OpenStreetMap' : 'Google Maps'}: ${b.category || niche?.label || 'business'}${where ? ` in ${where}` : ''}.`,
+      `Found on ${SOURCE_LABEL[b.source] || b.source}: ${b.category || niche?.label || 'business'}${where ? ` in ${where}` : ''}.`,
       b.rating ? `${b.rating.toFixed(1)} stars from ${b.reviewCount} Google reviews.` : '',
       b.hours ? `Hours: ${b.hours}.` : '',
     ].filter(Boolean).join(' ')
@@ -409,7 +496,7 @@ export async function pushBusinesses(ids: string[], target: { campaignId?: strin
       industry: niche?.label || b.category,
       subIndustry: b.category,
       campaignId,
-      leadSource: b.source === 'OSM' ? 'OSM' : 'GOOGLE_MAPS',
+      leadSource: b.source === 'OSM' ? 'OSM' : b.source === 'GOOGLE' ? 'GOOGLE_MAPS' : 'OTHER',
       status: 'READY_TO_CONTACT',
       priority: b.tier === 'HOT' ? 'HIGH' : b.tier === 'WARM' ? 'MEDIUM' : 'LOW',
       score: b.fitScore,
@@ -436,7 +523,7 @@ export async function pushBusinesses(ids: string[], target: { campaignId?: strin
       : await prisma.lead.create({ data })
     await prisma.activity.create({
       data: {
-        leadId: lead.id, userId, type: 'NOTE_ADDED', title: `${dupe ? 'Linked to' : 'Added from'} Lead Finder (${b.source === 'OSM' ? 'OpenStreetMap' : 'Google Maps'})`,
+        leadId: lead.id, userId, type: 'NOTE_ADDED', title: `${dupe ? 'Linked to' : 'Added from'} Lead Finder (${SOURCE_LABEL[b.source] || b.source})`,
         body: `${why}\n\nWhere the email came from:\n${b.searchLog || ''}`.slice(0, 4000),
         metadata: { businessId: b.id, mapsUrl: b.mapsUrl },
       },

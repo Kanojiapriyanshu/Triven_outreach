@@ -4,10 +4,11 @@
 //           nothing is ever billed. Google Maps pages are never scraped (Maps ToS).
 //   OSM:    OpenStreetMap via Nominatim (geocoding) + Overpass (tags). No key, ODbL licence.
 import prisma from '../prisma'
+import { configured, keysOf, withKey, KeyRejected, NoKeyError } from '../providers/keys'
 
 export interface PlaceResult {
   placeId: string
-  source: 'GOOGLE' | 'OSM'
+  source: 'GOOGLE' | 'OSM' | 'NPI' | 'TOMTOM' | 'FOURSQUARE'
   name: string
   types: string[]
   category?: string
@@ -28,6 +29,9 @@ export interface PlaceResult {
   email?: string
   facebook?: string
   instagram?: string
+  /** Decision maker named by the source itself (NPI's authorized official) */
+  ownerName?: string
+  ownerTitle?: string
 }
 
 /** Opening hours per day, Monday first: null = closed, [open, close] in minutes after midnight */
@@ -71,7 +75,7 @@ export function hoursFacts(week?: WeekHours | null) {
 // ─── Google Places API (New) ─────────────────────────────────────────────────
 
 export function googleConfigured() {
-  return !!process.env.GOOGLE_PLACES_API_KEY
+  return configured('google')
 }
 
 const FIELDS = [
@@ -128,25 +132,32 @@ export class PlacesError extends Error {
 
 /** One page (up to 20 places). Counted against the monthly free cap before the call is made. */
 export async function googleTextSearch(textQuery: string, opts: { pageToken?: string | null; regionCode?: string | null }) {
-  const key = process.env.GOOGLE_PLACES_API_KEY
-  if (!key) throw new PlacesError('Add GOOGLE_PLACES_API_KEY to use Google business search', 'KEY')
+  if (!keysOf('google').length) throw new PlacesError('Add GOOGLE_PLACES_API_KEY to use Google business search', 'KEY')
   await reserveGoogleCall()
-  const res = await fetch('https://places.googleapis.com/v1/places:searchText', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'X-Goog-Api-Key': key, 'X-Goog-FieldMask': FIELDS },
-    body: JSON.stringify({
-      textQuery, pageSize: 20, languageCode: 'en',
-      ...(opts.pageToken ? { pageToken: opts.pageToken } : {}),
-      ...(opts.regionCode ? { regionCode: opts.regionCode } : {}),
-    }),
-    signal: AbortSignal.timeout(20_000), cache: 'no-store',
-  })
-  const body = await res.json().catch(() => ({})) as { places?: GPlace[]; nextPageToken?: string; error?: { message?: string; status?: string } }
-  if (!res.ok) {
-    const msg = body.error?.message || `HTTP ${res.status}`
-    if (res.status === 429 || body.error?.status === 'RESOURCE_EXHAUSTED') throw new PlacesError(`Google quota reached: ${msg}`, 'QUOTA')
-    if (res.status === 403 || res.status === 400 && /api key/i.test(msg)) throw new PlacesError(`Google Places key problem: ${msg}`, 'KEY')
-    throw new PlacesError(`Google Places: ${msg}`)
+  let body: { places?: GPlace[]; nextPageToken?: string }
+  try {
+    // Several keys (several Google Cloud projects) are tried in turn; the monthly cap above covers them all
+    body = await withKey('google', async (key) => {
+      const res = await fetch('https://places.googleapis.com/v1/places:searchText', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Goog-Api-Key': key, 'X-Goog-FieldMask': FIELDS },
+        body: JSON.stringify({
+          textQuery, pageSize: 20, languageCode: 'en',
+          ...(opts.pageToken ? { pageToken: opts.pageToken } : {}),
+          ...(opts.regionCode ? { regionCode: opts.regionCode } : {}),
+        }),
+        signal: AbortSignal.timeout(20_000), cache: 'no-store',
+      })
+      const b = await res.json().catch(() => ({})) as { places?: GPlace[]; nextPageToken?: string; error?: { message?: string; status?: string } }
+      if (res.ok) return b
+      const msg = b.error?.message || `HTTP ${res.status}`
+      if (res.status === 429 || b.error?.status === 'RESOURCE_EXHAUSTED') throw new KeyRejected(`Google quota reached: ${msg}`, 'quota', new Date(Date.now() + 6 * 3_600_000))
+      if (res.status === 403 || res.status === 400 && /api key/i.test(msg)) throw new KeyRejected(`Google Places key problem: ${msg}`, 'auth')
+      throw new PlacesError(`Google Places: ${msg}`)
+    })
+  } catch (err) {
+    if (err instanceof NoKeyError) throw new PlacesError(err.message, /key problem|rejected/i.test(err.message) ? 'KEY' : 'QUOTA')
+    throw err
   }
   const places: PlaceResult[] = (body.places || []).map((p) => ({
     placeId: p.id,

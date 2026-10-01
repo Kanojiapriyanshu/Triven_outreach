@@ -1,41 +1,73 @@
 // Hunter.io, credit-aware. Free endpoints (account, email-count) are used to avoid wasting
 // paid calls; paid ones (email-finder, domain-search, combined enrichment) only run while the
 // account has more credits left than the reserve set in Audience → Rules.
+// HUNTER_API_KEY may hold several keys (comma separated): calls go to a key that still has
+// credits, and a key that runs out is parked until its reset date (see lib/providers/keys.ts).
 import { normalizeEmail, isUsableEmail } from './verify'
 import type { EmailStatus } from './taxonomy'
+import { configured, keysOf, keyLabel, parkKey, withKey, KeyRejected, NoKeyError } from '../providers/keys'
 
 const API = 'https://api.hunter.io/v2'
+const FREE_PATHS = ['account', 'email-count']
 
 export function hunterConfigured() {
-  return !!process.env.HUNTER_API_KEY
+  return configured('hunter')
+}
+
+interface RawAccount { plan_name?: string; reset_date?: string; requests?: { credits?: { available?: number; remaining?: number } } }
+
+async function accountOf(key: string) {
+  const res = await fetch(`${API}/account?api_key=${encodeURIComponent(key)}`, { signal: AbortSignal.timeout(15_000), cache: 'no-store' })
+  if (!res.ok) return null
+  return ((await res.json().catch(() => ({}))) as { data?: RawAccount }).data || null
 }
 
 async function get<T>(path: string, params: Record<string, string>) {
-  const qs = new URLSearchParams({ ...params, api_key: process.env.HUNTER_API_KEY || '' })
-  const res = await fetch(`${API}/${path}?${qs}`, { signal: AbortSignal.timeout(20_000), cache: 'no-store' })
-  if (res.status === 404) return null
-  const body = await res.json().catch(() => ({})) as { data?: T; errors?: Array<{ details?: string; id?: string }> }
-  if (res.status === 429 || res.status === 403) throw new HunterLimitError(body.errors?.[0]?.details || 'Hunter credits or rate limit reached')
-  if (!res.ok) throw new Error(`Hunter ${path}: ${body.errors?.[0]?.details || `HTTP ${res.status}`}`)
-  return body.data ?? null
+  try {
+    return await withKey('hunter', async (key) => {
+      const qs = new URLSearchParams({ ...params, api_key: key })
+      const res = await fetch(`${API}/${path}?${qs}`, { signal: AbortSignal.timeout(20_000), cache: 'no-store' })
+      if (res.status === 404) return null
+      const body = await res.json().catch(() => ({})) as { data?: T; errors?: Array<{ details?: string; id?: string }> }
+      const detail = body.errors?.[0]?.details || ''
+      if (res.status === 401) throw new KeyRejected(detail || 'Hunter rejected the key', 'auth')
+      if (res.status === 429 || res.status === 403) {
+        // Out of credits (park until the reset date) or just too fast (park for a few minutes)?
+        const acct = await accountOf(key).catch(() => null)
+        const empty = acct ? (acct.requests?.credits?.remaining ?? 0) < 1 : /usage|credit|limit/i.test(detail)
+        throw new KeyRejected(detail || 'Hunter credits or rate limit reached', empty ? 'quota' : 'rate', empty && acct?.reset_date ? new Date(acct.reset_date) : undefined)
+      }
+      if (!res.ok) throw new Error(`Hunter ${path}: ${detail || `HTTP ${res.status}`}`)
+      return body.data ?? null
+    }, { cost: FREE_PATHS.includes(path) ? 0 : 1 })
+  } catch (err) {
+    if (err instanceof NoKeyError) throw new HunterLimitError(err.message)
+    throw err
+  }
 }
 
 export class HunterLimitError extends Error {}
 
 // ─── Free ────────────────────────────────────────────────────────────────────
 
-export interface HunterAccount { plan: string; remaining: number; available: number; resetDate: string | null }
+export interface HunterAccount { plan: string; remaining: number; available: number; resetDate: string | null; keys: number }
 
-/** Credits left this month (free call) */
+/** Credits left this month across every key (free calls). Keys with nothing left are parked until they reset. */
 export async function hunterAccount(): Promise<HunterAccount | null> {
-  if (!hunterConfigured()) return null
-  const d = await get<{ plan_name?: string; reset_date?: string; requests?: { credits?: { available?: number; remaining?: number } } }>('account', {})
-  if (!d) return null
+  const keys = keysOf('hunter')
+  if (!keys.length) return null
+  const accounts = await Promise.all(keys.map(async (key) => ({ key, d: await accountOf(key).catch(() => null) })))
+  const live = accounts.filter((a) => a.d)
+  if (!live.length) return null
+  for (const a of live) {
+    if ((a.d!.requests?.credits?.remaining ?? 0) < 1) await parkKey('hunter', a.key, `Out of credits (${keyLabel(a.key)})`, a.d!.reset_date ? new Date(a.d!.reset_date) : undefined)
+  }
   return {
-    plan: d.plan_name || '',
-    remaining: Math.floor(d.requests?.credits?.remaining ?? 0),
-    available: Math.floor(d.requests?.credits?.available ?? 0),
-    resetDate: d.reset_date || null,
+    plan: [...new Set(live.map((a) => a.d!.plan_name || ''))].filter(Boolean).join(', '),
+    remaining: live.reduce((n, a) => n + Math.floor(a.d!.requests?.credits?.remaining ?? 0), 0),
+    available: live.reduce((n, a) => n + Math.floor(a.d!.requests?.credits?.available ?? 0), 0),
+    resetDate: live.map((a) => a.d!.reset_date).filter(Boolean).sort()[0] || null,
+    keys: keys.length,
   }
 }
 

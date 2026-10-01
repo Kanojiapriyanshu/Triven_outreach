@@ -13,6 +13,7 @@ import { finderBacklog, runFinder } from '@/lib/finder/pipeline'
 import { checkAllReplies } from '@/lib/replies'
 import { runSequencer } from '@/lib/sequencer'
 import { runDailyJobs } from '@/lib/daily'
+import { providerStatus } from '@/lib/providers/keys'
 
 export const maxDuration = 60
 
@@ -20,7 +21,7 @@ export async function GET() {
   const session = await requireAuth()
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   const now = new Date()
-  const [worker, capacity, setup, audience, finder, followUpsDue, followUpsOverdue, errors] = await Promise.all([
+  const [worker, capacity, setup, audience, finder, followUpsDue, followUpsOverdue, errors, providers] = await Promise.all([
     workerStats(),
     campaignCapacity(),
     setupChecklist(),
@@ -29,10 +30,11 @@ export async function GET() {
     prisma.followUpTask.count({ where: { status: 'PENDING', scheduledAt: { lte: now } } }),
     prisma.followUpTask.count({ where: { status: 'PENDING', scheduledAt: { lt: new Date(now.getTime() - 86_400_000) } } }),
     prisma.workerRun.findMany({ where: { ok: false }, orderBy: { startedAt: 'desc' }, take: 8, select: { action: true, startedAt: true, error: true } }),
+    providerStatus(),
   ])
   const appUrl = (process.env.NEXT_PUBLIC_APP_URL || '').replace(/\/$/, '')
   return NextResponse.json({
-    worker, capacity, setup, errors: errors.map((e) => ({ ...e, error: e.error?.split('\n')[0] })),
+    worker, capacity, setup, providers, errors: errors.map((e) => ({ ...e, error: e.error?.split('\n')[0] })),
     queues: { audience, finder, followUpsDue, followUpsOverdue },
     // Admin-only route: the one URL to paste into a scheduler, secret included
     scheduler: { url: `${appUrl}/api/worker`, autoUrl: process.env.WORKER_SECRET ? `${appUrl}/api/worker?action=auto&secret=${encodeURIComponent(process.env.WORKER_SECRET)}` : '', header: 'X-Worker-Secret', secretSet: !!process.env.WORKER_SECRET },

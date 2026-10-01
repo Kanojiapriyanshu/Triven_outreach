@@ -1,4 +1,5 @@
 'use client'
+import { SOURCE_LABEL as LISTING_LABEL } from '@/lib/finder/source-labels'
 import { useState } from 'react'
 import useSWR from 'swr'
 import Link from 'next/link'
@@ -88,7 +89,7 @@ export default function BusinessDialog({ id, onClose, onChanged, onPush }: { id:
                     <DialogDescription className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
                       {b.rating != null && <span className="inline-flex items-center gap-1 text-slate-700"><Star className="h-3.5 w-3.5 fill-amber-400 text-amber-400" />{b.rating.toFixed(1)} <span className="text-slate-400">({b.reviewCount})</span></span>}
                       {where && <span className="inline-flex items-center gap-1"><MapPin className="h-3.5 w-3.5" />{where}</span>}
-                      {b.mapsUrl && <a href={b.mapsUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-indigo-600 hover:underline">{b.source === 'OSM' ? 'OpenStreetMap' : 'Google Maps'}<ExternalLink className="h-3 w-3" /></a>}
+                      {b.mapsUrl && <a href={b.mapsUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-indigo-600 hover:underline">{LISTING_LABEL[b.source] || 'Listing'}<ExternalLink className="h-3 w-3" /></a>}
                     </DialogDescription>
                   </div>
                   <div className="text-right shrink-0">

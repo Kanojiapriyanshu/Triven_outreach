@@ -17,6 +17,7 @@ import FinderPushDialog from '@/components/finder/FinderPushDialog'
 import BusinessDialog from '@/components/finder/BusinessDialog'
 import { BizStatusBadge, TierBadge, FitBar } from '@/components/finder/badges'
 import { NICHES, LOCATION_PRESETS, nicheOf } from '@/lib/finder/niches'
+import { SOURCE_LABEL } from '@/lib/finder/source-labels'
 import { flag } from '@/lib/audience/country'
 import { fmtRelative } from '@/lib/utils'
 
@@ -34,7 +35,10 @@ interface Overview {
   status: Record<string, number>; tiers: Record<string, number>; callList: number; total: number
   backlog: { searches: number; research: number; total: number }; settings: Settings
   google: { configured: boolean; used: number; cap: number }
-  services: { google: boolean; search: string | null; verifier: string | null; hunter: { remaining: number | null; available: number | null } | null }
+  services: {
+    google: boolean; search: string | null; verifier: string | null; hunter: { remaining: number | null; available: number | null; keys: number } | null
+    finders: string[]; sources: Array<{ id: string; label: string; on: boolean }>
+  }
 }
 interface SearchRow {
   id: string; query: string; niche: string | null; locations: string[]; country: string | null; provider: string; status: string
@@ -326,9 +330,10 @@ function ServiceStrip({ overview, onSettings }: { overview?: Overview; onSetting
   const s = overview.services
   const chips: Array<{ on: boolean; label: string; detail: string; hint: string }> = [
     { on: s.google, label: 'Google Maps', detail: s.google ? `${overview.google.used}/${overview.google.cap} calls this month` : 'add GOOGLE_PLACES_API_KEY', hint: 'Best coverage: ratings, reviews, hours. Free up to ~1,000 searches a month (20 businesses each); the app stops at your cap.' },
-    { on: true, label: 'OpenStreetMap', detail: 'free, no key', hint: 'Always available. Fewer ratings/hours than Google, sometimes has the email.' },
+    ...s.sources.filter((x) => x.id === 'FOURSQUARE' || x.id === 'TOMTOM').map((x) => ({ on: x.on, label: x.label, detail: x.on ? 'connected' : `add ${x.id}_API_KEY`, hint: x.id === 'FOURSQUARE' ? 'Its own business data with website, phone and often an email. 10,000 free searches a month.' : 'Its own business data with website and phone. 2,500 free searches a day.' })),
+    { on: true, label: 'NPI Registry + OpenStreetMap', detail: 'free, no key', hint: 'Always available. NPI lists every US health practice (dentists, chiropractors…) with phone and official contact; OpenStreetMap sometimes has the email.' },
     { on: !!s.search, label: 'Web search', detail: s.search ? s.search.toLowerCase() : 'add SERPER_API_KEY', hint: 'Finds emails published outside their site and the owner\'s LinkedIn title (LinkedIn itself is never scraped).' },
-    { on: !!s.hunter, label: 'Hunter', detail: s.hunter ? (s.hunter.remaining != null ? `${s.hunter.remaining} credits left` : 'connected') : 'optional', hint: 'Only used when the website has nothing; a free check runs first so no credit is wasted.' },
+    { on: s.finders.length > 0, label: 'Email finders', detail: s.finders.length ? `${s.finders.map((f) => f.toLowerCase()).join(' + ')}${s.hunter?.remaining != null ? ` · Hunter ${s.hunter.remaining} credits${s.hunter.keys > 1 ? ` on ${s.hunter.keys} keys` : ''}` : ''}` : 'optional', hint: 'Hunter, Apollo, Prospeo and Tomba, tried one after another and only when the website has nothing. Each key\'s usage is tracked on System Health.' },
     { on: !!s.verifier, label: 'Verifier', detail: s.verifier ? s.verifier.toLowerCase() : 'add one for more emails', hint: 'Confirms guessed addresses (owner@, info@). Without it, guesses are never used. ZeroBounce, MillionVerifier, NeverBounce or Reoon.' },
   ]
   return (
@@ -351,12 +356,13 @@ function NewSearch({ overview, onDone }: { overview?: Overview; onDone: (searchI
   const [custom, setCustom] = useState('')
   const [locText, setLocText] = useState('')
   const [country, setCountry] = useState('US')
-  const [provider, setProvider] = useState<'GOOGLE' | 'OSM' | ''>('')
+  const [provider, setProvider] = useState('AUTO')
   const [perPlace, setPerPlace] = useState(60)
   const [busy, setBusy] = useState(false)
-  const src = provider || (overview?.services.google ? 'GOOGLE' : 'OSM')
+  const src = provider
+  const sources = overview?.services.sources || []
   const locations = locText.split(/\n|;/).map((l) => l.trim()).filter((l) => l.length >= 2)
-  const calls = src === 'GOOGLE' ? locations.length * Math.ceil(perPlace / 20) : 0
+  const calls = src === 'GOOGLE' || (src === 'AUTO' && overview?.services.google) ? locations.length * Math.ceil(Math.min(perPlace, 60) / 20) : 0
 
   async function run() {
     if (!locations.length) return toast.error('Add at least one city or area')
@@ -393,9 +399,9 @@ function NewSearch({ overview, onDone }: { overview?: Overview; onDone: (searchI
               <select value={country} onChange={(e) => setCountry(e.target.value)} className="h-9 flex-1 rounded-lg border border-slate-300 px-2 text-sm">
                 {COUNTRY_OPTIONS.map(([c, n]) => <option key={c} value={c}>{flag(c)} {n}</option>)}
               </select>
-              <select value={src} onChange={(e) => setProvider(e.target.value as 'GOOGLE' | 'OSM')} className="h-9 rounded-lg border border-slate-300 px-2 text-sm">
-                <option value="GOOGLE" disabled={!overview?.services.google}>Google Maps{overview?.services.google ? '' : ' (no key)'}</option>
-                <option value="OSM">OpenStreetMap</option>
+              <select value={src} onChange={(e) => setProvider(e.target.value)} className="h-9 rounded-lg border border-slate-300 px-2 text-sm" title="All sources runs every source that fits this search and merges duplicates">
+                <option value="AUTO">All sources (best)</option>
+                {sources.map((x) => <option key={x.id} value={x.id} disabled={!x.on}>{x.label}{x.on ? '' : ' (no key)'}</option>)}
               </select>
             </div>
           </div>
@@ -415,12 +421,14 @@ function NewSearch({ overview, onDone }: { overview?: Overview; onDone: (searchI
           <div className="flex flex-col justify-end gap-2 lg:w-52">
             <select value={perPlace} onChange={(e) => setPerPlace(Number(e.target.value))} className="h-9 rounded-lg border border-slate-300 px-2 text-sm">
               <option value={20}>Up to 20 per city</option><option value={40}>Up to 40 per city</option><option value={60}>Up to 60 per city</option>
+              <option value={100}>Up to 100 per city</option><option value={200}>Up to 200 per city</option>
             </select>
             <Button onClick={run} loading={busy} className="h-10"><Play className="h-4 w-4" />Find businesses</Button>
             <p className="text-[10.5px] leading-snug text-slate-400">
               {locations.length ? `${locations.length} location${locations.length === 1 ? '' : 's'}` : 'No locations yet'}
-              {src === 'GOOGLE' && locations.length ? ` · up to ${calls} Google call${calls === 1 ? '' : 's'} (${Math.max(0, (overview?.google.cap || 0) - (overview?.google.used || 0))} left this month)` : ''}
-              {src === 'OSM' ? ' · free' : ''}
+              {calls && locations.length ? ` · up to ${calls} Google call${calls === 1 ? '' : 's'} (${Math.max(0, (overview?.google.cap || 0) - (overview?.google.used || 0))} left this month)` : ''}
+              {src === 'OSM' || src === 'NPI' ? ' · free' : ''}
+              {src === 'AUTO' ? ' · per source; the same business from two sources is merged' : ''}
             </p>
           </div>
         </div>
@@ -460,7 +468,7 @@ function SearchLine({ s, active, onPick, onChanged }: { s: SearchRow; active: bo
           <span className="text-slate-500"> in {s.locations.slice(0, 3).join(', ')}{s.locations.length > 3 ? ` +${s.locations.length - 3} more` : ''}</span>
         </p>
         <p className="text-[11px] text-slate-400">
-          {s.provider === 'OSM' ? 'OpenStreetMap' : 'Google'} · {fmtRelative(s.createdAt)} · {s.added} new, {s.duplicates} known, {s.filtered} filtered out
+          {SOURCE_LABEL[s.provider] || s.provider} · {fmtRelative(s.createdAt)} · {s.added} new, {s.duplicates} known, {s.filtered} filtered out
           {s.lastError && <span className="text-red-500"> · {s.lastError}</span>}
         </p>
       </button>
@@ -530,7 +538,7 @@ function SettingsDialog({ open, onOpenChange, initial, onSaved }: { open: boolea
             <Toggle k="excludeChains" label="Skip chains and franchises" hint="Aspen Dental, Roto-Rooter, State Farm… and any website shared by 3+ listings. A local manager can't buy." />
             <Toggle k="autoResearch" label="Research in the background" hint="The 5-minute worker finishes searches and finds emails on its own." />
             <Toggle k="useWebSearch" label="Use web search" hint="Emails published outside their site, and the owner's name from LinkedIn search results (1–2 searches per business)." />
-            <Toggle k="useHunter" label="Use Hunter when nothing else works" hint="Keeps the credit reserve set in Audience → Rules." />
+            <Toggle k="useHunter" label="Use email finders when nothing else works" hint="Hunter, Apollo, Prospeo and Tomba, one after another. Hunter keeps the credit reserve set in Audience → Rules." />
             <Toggle k="guessEmails" label="Try likely addresses" hint="owner@, info@, office@… Only kept when a verifier confirms the mailbox exists." />
           </div>
         </div>

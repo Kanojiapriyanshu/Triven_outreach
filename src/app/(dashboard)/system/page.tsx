@@ -3,7 +3,7 @@ import { useState } from 'react'
 import Link from 'next/link'
 import useSWR from 'swr'
 import { toast } from 'sonner'
-import { Activity, CheckCircle2, CircleAlert, XCircle, Play, Copy, Clock, Megaphone, ListChecks } from 'lucide-react'
+import { Activity, CheckCircle2, CircleAlert, XCircle, Play, Copy, Clock, Megaphone, ListChecks, Database } from 'lucide-react'
 import PageHeader from '@/components/layout/PageHeader'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -21,6 +21,20 @@ interface Data {
   queues: { audience: { total: number }; finder: { total: number }; followUpsDue: number; followUpsOverdue: number }
   errors: Array<{ action: string; startedAt: string; error: string | null }>
   scheduler: { url: string; autoUrl: string; header: string; secretSet: boolean }
+  providers: Provider[]
+}
+interface Provider {
+  id: string; label: string; kind: 'discovery' | 'search' | 'finder' | 'verifier'; env: string; use: string; free: string; signup: string; keyHint?: string
+  state: 'OK' | 'EXHAUSTED' | 'ERROR' | 'OFF'; usedMonth: number; capMonth: number | null
+  keys: Array<{ label: string; usedMonth: number; usedToday: number; left: number | null; blockedUntil: string | null; reason: string | null }>
+}
+
+const KIND_LABEL: Record<Provider['kind'], string> = { discovery: 'Find businesses', search: 'Web search', finder: 'Find emails', verifier: 'Check emails' }
+const PROVIDER_STATE: Record<Provider['state'], { label: string; className: string }> = {
+  OK: { label: 'working', className: 'bg-emerald-50 text-emerald-700' },
+  EXHAUSTED: { label: 'used up', className: 'bg-amber-50 text-amber-700' },
+  ERROR: { label: 'key rejected', className: 'bg-red-50 text-red-700' },
+  OFF: { label: 'no key', className: 'bg-slate-100 text-slate-500' },
 }
 
 const ACTION_LABEL: Record<string, string> = { tick: 'Send & replies', audience: 'Audience pipeline', finder: 'Lead Finder' }
@@ -92,6 +106,9 @@ export default function SystemPage() {
         </CardContent>
       </Card>
 
+      {/* Data sources */}
+      {data?.providers && <DataSources providers={data.providers} />}
+
       {/* Campaign capacity */}
       <Card>
         <CardHeader className="pb-2"><CardTitle className="flex items-center gap-2"><Megaphone className="h-4 w-4 text-slate-400" />Campaigns: can they send?</CardTitle></CardHeader>
@@ -153,6 +170,59 @@ export default function SystemPage() {
         </Card>
       </div>
     </div>
+  )
+}
+
+function DataSources({ providers }: { providers: Provider[] }) {
+  const kinds = ['discovery', 'search', 'finder', 'verifier'] as const
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <CardTitle className="flex items-center gap-2"><Database className="h-4 w-4 text-slate-400" />Data sources
+          <span className="text-sm font-normal text-slate-500">· {providers.filter((p) => p.state === 'OK').length} working, plus NPI Registry and OpenStreetMap (free, no key)</span>
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <p className="text-xs text-slate-500">
+          Each source is used until its free allowance is gone, then the next one takes over. To add a key: Vercel → Settings → Environment Variables, then redeploy.
+          Several keys for one source go in the same variable, separated by commas.
+        </p>
+        {kinds.map((kind) => (
+          <div key={kind}>
+            <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500">{KIND_LABEL[kind]}</p>
+            <div className="divide-y divide-slate-100 rounded-lg border border-slate-200">
+              {providers.filter((p) => p.kind === kind).map((p) => (
+                <div key={p.id} className="flex flex-wrap items-start gap-x-4 gap-y-1 px-3 py-2">
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm text-slate-800">
+                      <span className="font-medium">{p.label}</span>
+                      <span className={`ml-2 rounded-full px-2 py-0.5 text-[11px] font-medium ${PROVIDER_STATE[p.state].className}`}>{PROVIDER_STATE[p.state].label}</span>
+                    </p>
+                    <p className="text-xs text-slate-500">{p.use}. Free: {p.free}.</p>
+                    {p.state === 'OFF' && (
+                      <p className="mt-0.5 text-[11px] text-slate-400">
+                        <a href={p.signup} target="_blank" rel="noreferrer" className="text-indigo-600 hover:underline">Get a key</a> and add it as <code className="rounded bg-slate-100 px-1">{p.env}</code>{p.keyHint ? ` (${p.keyHint})` : ''}
+                      </p>
+                    )}
+                  </div>
+                  {p.keys.length > 0 && (
+                    <div className="text-right text-[11px] text-slate-500">
+                      <p className="tabular-nums text-slate-700">{p.usedMonth.toLocaleString('en-US')}{p.capMonth ? ` / ${p.capMonth.toLocaleString('en-US')}` : ''} used this month</p>
+                      {p.keys.map((k) => (
+                        <p key={k.label} className={k.blockedUntil ? 'text-amber-700' : ''} title={k.reason || undefined}>
+                          key {k.label}: {k.blockedUntil ? `paused until ${new Date(k.blockedUntil).toLocaleString('en-US', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' })}` : k.left !== null ? `${k.left.toLocaleString('en-US')} left` : `${k.usedMonth.toLocaleString('en-US')} used`}
+                        </p>
+                      ))}
+                      {p.keys.find((k) => k.reason) && <p className="max-w-[260px] truncate text-amber-700">{p.keys.find((k) => k.reason)!.reason}</p>}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
+      </CardContent>
+    </Card>
   )
 }
 

@@ -228,18 +228,29 @@ Finds local businesses that fit an AI receptionist and the best email for each.
 
 1. Pick a niche (26: dentists, med spas, HVAC, law firms…) or type anything (Google only), one or more
    cities (presets for US metros, Texas, Florida, California, Canada, UK, Australia), country and source.
-2. **Google Places API** (ratings, reviews, hours; capped under Google's free monthly allowance) or
-   **OpenStreetMap** (free, no key, automatic mirror fallback and retries).
+2. Source: **All sources** (default) runs every source that fits the search, one after another, and
+   merges the same business found twice (matched on phone, website + city, or name + city; the record
+   you already have gains whatever it was missing, and a newly learned website reopens its research).
+   - **Google Places** (ratings, reviews, hours; capped under Google's free monthly allowance)
+   - **Foursquare** (website, phone, often an email; 10,000 free searches a month)
+   - **TomTom** (website and phone; 2,500 free searches a day)
+   - **NPI Registry** (US government list of every dental, chiropractic, optometry, physical-therapy and
+     dermatology practice, with phone and official contact; free, no key; no websites, so research finds
+     the site by web search and only accepts one that clearly belongs to the practice)
+   - **OpenStreetMap** (free, no key, automatic mirror fallback and retries)
+   A source that is out of credits is skipped; the others carry on.
 3. Off-niche results, closed businesses and **chains/franchises** are dropped automatically.
 4. The email waterfall: the listing → their website (contact, about, team, privacy pages; hidden and
    structured addresses; ignores the web designer's) → web search → owner's name (site or LinkedIn search
-   titles) → Hunter (only when nothing else works) → **verified** guesses (never used unverified).
+   titles) → email finders, one after another (Hunter → Apollo → Prospeo → Tomba, only when nothing else
+   works) → **verified** guesses (never used unverified). Listings with no website wait for the next
+   day when the web-search budget is used up, instead of being marked "no email".
 5. **Fit score** with reasons (call value, reviews, rating, closed weekends, early closing, owner known,
    competitor tools found…) and tiers Hot ≥ 80 / Warm ≥ 55 / Cold. No email → **Call list**.
 6. **Add to campaign** routes each niche to its campaign (created in one click with its sequence).
 
 Rules: which emails count as ready, minimum reviews/rating, Google monthly cap, skip chains, background
-research, web search, Hunter, guesses.
+research, web search, email finders, guesses.
 
 ---
 
@@ -458,12 +469,21 @@ Set in Vercel (Settings → Environment Variables, then redeploy) and in `.env`.
 | `WORKER_SECRET` | Yes | Worker authentication |
 | `YOUTUBE_API_KEY` | For YouTube | Audience discovery (10,000 units/day) |
 | `ANTHROPIC_API_KEY`, `AUDIENCE_AI_MODEL` | Recommended | Use case, cited Why Triven, reply triage and suggestions |
-| One of `MILLIONVERIFIER_API_KEY`, `ZEROBOUNCE_API_KEY`, `NEVERBOUNCE_API_KEY`, `REOON_API_KEY` | Recommended | Mailbox verification |
+| Any of `REOON_API_KEY`, `ZEROBOUNCE_API_KEY`, `MILLIONVERIFIER_API_KEY`, `NEVERBOUNCE_API_KEY` | Recommended | Mailbox verification. All that are set are used, in that order; when one runs out the next takes over |
 | `SERPER_API_KEY` or `BRAVE_SEARCH_API_KEY` | Recommended | Identity search, emails published elsewhere, owner names |
-| `HUNTER_API_KEY`, `APOLLO_API_KEY` | Optional | Email finders |
+| `HUNTER_API_KEY`, `APOLLO_API_KEY`, `PROSPEO_API_KEY`, `TOMBA_API_KEY` | Optional | Email finders, tried in that order. Tomba's value is `key:secret` (`ta_…:ts_…`) |
 | `GOOGLE_PLACES_API_KEY` | Optional | Lead Finder on Google Maps (enable Places API (New)) |
+| `FOURSQUARE_API_KEY`, `TOMTOM_API_KEY` | Optional | More Lead Finder sources |
 | `CALENDAR_WEBHOOK_SECRET` | Optional | Cal.com / Calendly meeting sync |
-| `EMAIL_VERIFIER`, `YOUTUBE_DAILY_QUOTA` | Optional | Choose a verifier / raised quota |
+| `EMAIL_VERIFIER`, `YOUTUBE_DAILY_QUOTA` | Optional | Verifier to use first / raised quota |
+
+**Several keys per service.** Any key variable may hold several keys separated by commas
+(`HUNTER_API_KEY=first,second`). Calls go to the least-used key; a key that runs out of credits, is rate
+limited or is rejected is paused (until it resets, for a few minutes, or for a day) and the next key, then
+the next service, takes over. **System Health → Data sources** shows every service, each key by its last
+four characters, what it has used this month and why a key is paused. Free-plan limits are built in; on a
+paid plan raise them with `<NAME>_MONTHLY_CAP` or `<NAME>_DAILY_CAP` (0 = no limit), e.g.
+`TOMBA_MONTHLY_CAP=1000`. Check each provider's terms before using more than one account with it.
 
 ---
 

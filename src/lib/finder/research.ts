@@ -1,25 +1,28 @@
 // Finding a way to reach a local business, cheapest and most reliable source first:
 //
-//   1. the listing itself (OpenStreetMap often carries an email tag)
+//   1. the listing itself (OpenStreetMap and Foursquare often carry an email)
+//   1b. no website on the listing (registry sources never have one): find it by web search
 //   2. their own website: home, contact, about/team, privacy pages; mailto, Cloudflare-hidden,
 //      JSON-LD and "name [at] domain" addresses; the owner / lead doctor; booking & chat tools
 //   3. web-search API: pages that mention "@theirdomain.com" (directories, chambers, PDFs)
 //   4. owner's name from a LinkedIn *search result title* (LinkedIn itself is never fetched)
-//   5. Hunter (free "does Hunter know this domain" check before any credit is spent)
+//   5. email finders, one after another: Hunter (free "does Hunter know this domain" check
+//      first), Apollo, Prospeo, Tomba. A finder whose keys are used up is skipped
 //   6. guesses (owner / info@ / office@…) kept ONLY if a verifier confirms the mailbox
 //
 // Every step is logged, so the UI can show exactly where we looked.
 import { fetchHtml, hostOf, htmlToText, parsePage, patternGuesses, SHARED_HOSTS } from '../audience/enrich'
 import { emailTraits, FREE_MAIL, normalizeEmail, isUsableEmail, verifierProvider, verifyEmail, verifyWithHunter } from '../audience/verify'
 import { searchProvider, webSearch } from '../audience/identity'
-import { findBusinessEmail } from '../audience/finders'
+import { findBusinessEmail, finderProviders } from '../audience/finders'
 import { hunterAccount, hunterConfigured, hunterEmailCount } from '../audience/hunter'
 import { getAudienceSettings } from '../audience/settings'
 import type { Niche } from './niches'
 import type { FinderSettings } from './settings'
 import { budgetLeft, spend } from '../budget'
+import { NoKeyError } from '../providers/keys'
 
-export type BizEmailSource = 'LISTING' | 'WEBSITE' | 'SEARCH' | 'HUNTER' | 'PATTERN' | 'ROLE_GUESS' | 'MANUAL'
+export type BizEmailSource = 'LISTING' | 'WEBSITE' | 'SEARCH' | 'HUNTER' | 'APOLLO' | 'TOMBA' | 'PROSPEO' | 'PATTERN' | 'ROLE_GUESS' | 'MANUAL'
 
 export interface FoundBizEmail {
   email: string
@@ -35,6 +38,10 @@ export interface FoundBizEmail {
 
 export interface Research {
   emails: FoundBizEmail[]
+  /** Their own site, when the listing had none and a web search found it */
+  website?: string
+  /** The website search couldn't run (daily budget or credits used up): try this business again later */
+  deferred?: boolean
   phone?: string
   contactFormUrl?: string
   facebook?: string
@@ -260,6 +267,54 @@ async function ownerFromSearch(name: string, city: string | undefined, country: 
   }
 }
 
+// Directories and profile sites: never a business's own website
+const DIRECTORY = /(^|\.)(yelp\.[a-z.]+|yellowpages\.com|mapquest\.com|bbb\.org|healthgrades\.com|zocdoc\.com|webmd\.com|vitals\.com|doximity\.com|npino\.com|npidb\.org|npiprofile\.com|opennpi\.com|hipaaspace\.com|dentistry\.com|1-800-dentist\.com|opencare\.com|ratemds\.com|sharecare\.com|usnews\.com|care\.com|angi\.com|homeadvisor\.com|thumbtack\.com|houzz\.com|nextdoor\.com|manta\.com|chamberofcommerce\.com|superpages\.com|dexknows\.com|citysearch\.com|foursquare\.com|tripadvisor\.[a-z.]+|linkedin\.com|facebook\.com|instagram\.com|x\.com|twitter\.com|youtube\.com|tiktok\.com|wikipedia\.org|bizapedia\.com|opencorporates\.com|dnb\.com|zoominfo\.com|crunchbase\.com|indeed\.com|glassdoor\.[a-z.]+|google\.com|bing\.com|apple\.com|amazon\.[a-z.]+|medicare\.gov|[a-z.]+\.gov|birdeye\.com|doctor\.com|wellness\.com|findatopdoc\.com|md\.com)$/i
+// Words in a business name that don't identify it
+const COMMON_NAME_WORD = /^(dental|dentistry|dentist|family|care|center|centre|clinic|associates|group|office|practice|services?|company|professional|health|medical|smiles?|the|and|of|llc|inc|pllc|dds|dmd|corp|ltd|pa|pc)$/
+
+/**
+ * A listing with no website (registry sources never have one): the first search result that is
+ * their own domain and carries a distinctive word of their name. A wrong site would mean a
+ * wrong email, so when nothing clearly matches we return nothing.
+ */
+const FOREIGN_TLD = /\.(uk|wales|scot|cymru|ie|au|nz|ca|in|za|sg|de|fr|es|it|nl|eu)$/i
+
+async function findWebsite(b: { name: string; city?: string | null; state?: string | null; country?: string | null; ownerName?: string | null }, r: Research) {
+  const tokens = b.name.toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter((w) => w.length > 3 && !COMMON_NAME_WORD.test(w))
+  if (!tokens.length) { r.log.push('Website search skipped: the name is too generic to match a site safely'); return '' }
+  if (!(await budgetLeft('search'))) { r.deferred = true; r.log.push('Website search waiting: daily web-search budget reached, tried again tomorrow'); return '' }
+  try {
+    await spend('search')
+    const results = await webSearch(`${b.name} ${[b.city, b.state].filter(Boolean).join(' ')}`.trim(), b.country)
+    const city = (b.city || '').toLowerCase()
+    const ownerLast = splitName(b.ownerName || undefined).last.toLowerCase().replace(/[^a-z]/g, '')
+    for (const res of results.slice(0, 6)) {
+      const host = hostOf(res.url)
+      if (!host || DIRECTORY.test(host) || !ownDomain(res.url)) continue
+      if ((!b.country || b.country.toUpperCase() === 'US') && FOREIGN_TLD.test(host)) continue
+      const flat = host.replace(/[^a-z0-9]/g, '')
+      const title = res.title.toLowerCase()
+      const inHost = tokens.filter((t) => flat.includes(t)).length
+      const local = !!city && `${title} ${res.snippet.toLowerCase()}`.includes(city)
+      // The domain itself must carry their name (all of it, or part of it on a page about their
+      // city), or the owner's surname; failing that, the title must carry the whole name and the city
+      const ok = inHost === tokens.length
+        || (inHost >= 1 && local)
+        || (ownerLast.length > 3 && flat.includes(ownerLast) && local)
+        || (tokens.length >= 2 && tokens.every((t) => title.includes(t)) && local)
+      if (ok) {
+        r.log.push(`No website on the listing: found ${host} by web search`)
+        return `https://${host}`
+      }
+    }
+    r.log.push('No website on the listing, and web search found no site that clearly belongs to them')
+  } catch (err) {
+    if (err instanceof NoKeyError) r.deferred = true
+    r.log.push(`Website search failed: ${(err as Error).message}`)
+  }
+  return ''
+}
+
 function splitName(full?: string) {
   const parts = (full || '').replace(/^Dr\.?\s+/i, '').replace(/,.*$/, '').trim().split(/\s+/)
   return { first: parts[0] || '', last: parts.length > 1 ? parts[parts.length - 1] : '' }
@@ -276,7 +331,7 @@ function spendHunter(n: number) { if (hunterCredits) hunterCredits.left -= n }
 
 /** The whole waterfall for one business */
 export async function researchBusiness(b: {
-  name: string; website?: string | null; city?: string | null; country?: string | null; ownerName?: string | null; listingEmail?: string | null
+  name: string; website?: string | null; city?: string | null; state?: string | null; country?: string | null; ownerName?: string | null; listingEmail?: string | null
 }, niche: Niche | null, s: FinderSettings, deadline: number): Promise<Research> {
   const r: Research = { emails: [], techSignals: [], siteFacts: [], log: [] }
   if (b.ownerName) { r.ownerName = b.ownerName }
@@ -291,8 +346,14 @@ export async function researchBusiness(b: {
   // 2. Website
   let domain = ''
   const host = b.website ? hostOf(b.website) : ''
-  if (!b.website) r.log.push('No website on the listing')
-  else if (SOCIAL_SITE.test(host)) {
+  if (!b.website) {
+    const site = s.useWebSearch && searchProvider() && deadline - Date.now() > 12_000 ? await findWebsite(b, r) : ''
+    if (site) {
+      r.website = site
+      domain = await researchWebsite(site, niche, r, deadline)
+      domain ||= ownDomain(site)
+    } else if (!r.log.length || !/website/i.test(r.log[r.log.length - 1])) r.log.push('No website on the listing')
+  } else if (SOCIAL_SITE.test(host)) {
     r.log.push(`"Website" is a ${host} page, not their own site`)
     if (/facebook|fb\.com/.test(host)) r.facebook = b.website
   } else {
@@ -313,16 +374,19 @@ export async function researchBusiness(b: {
     await ownerFromSearch(b.name, b.city || undefined, country, r)
   }
 
-  // 5. Hunter, only when nothing usable came from free sources
+  // 5. Email finders, only when nothing usable came from free sources
   const reserve = (await getAudienceSettings()).hunterReserve
-  if (s.useHunter && hunterConfigured() && domain && !r.emails.length && deadline - Date.now() > 8_000) {
-    if (await hunterCreditsLeft() > reserve) {
+  if (s.useHunter && finderProviders().length && domain && !r.emails.length && deadline - Date.now() > 8_000) {
+    // Hunter keeps its credit reserve; the other finders have their own free allowances
+    const hunterOk = hunterConfigured() && await hunterCreditsLeft() > reserve
+    if (hunterConfigured() && !hunterOk) r.log.push(`Hunter skipped: credits at the reserve (${reserve})`)
+    if (hunterOk || finderProviders().some((f) => f !== 'HUNTER')) {
       const { first, last } = splitName(r.ownerName)
-      const res = await findBusinessEmail({ firstName: first || null, lastName: last || null, website: `https://${domain}`, company: b.name })
-      spendHunter(1)
-      if (res.found) r.emails.push({ email: res.found.email, source: 'HUNTER', sourceUrl: res.found.sourceUrl, confidence: res.found.confidence, status: res.found.status, verifyMethod: res.found.status === 'VERIFIED' ? 'HUNTER' : undefined, verifyDetail: res.found.detail })
-      r.log.push(...res.notes.map((n) => `Hunter: ${n.replace(/^Hunter:?\s*/, '')}`))
-    } else r.log.push(`Hunter skipped: credits at the reserve (${reserve})`)
+      const res = await findBusinessEmail({ firstName: first || null, lastName: last || null, website: `https://${domain}`, company: b.name }, { hunter: hunterOk })
+      if (res.found?.source === 'HUNTER') spendHunter(1)
+      if (res.found) r.emails.push({ email: res.found.email, source: res.found.source, sourceUrl: res.found.sourceUrl, confidence: res.found.confidence, status: res.found.status, verifyMethod: res.found.status === 'VERIFIED' ? res.found.source : undefined, verifyDetail: res.found.detail })
+      r.log.push(...res.notes.map((n) => `Email finders: ${n}`))
+    }
   }
 
   // 6. Guesses, confirmed or thrown away

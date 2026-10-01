@@ -5,7 +5,7 @@ import { isUsableEmail, normalizeEmail } from './verify'
 import { profileHints } from './classify'
 import { countryFromDomain } from './taxonomy'
 
-export type EmailSource = 'CHANNEL' | 'CHANNEL_VIDEO' | 'COMMENT' | 'WEBSITE' | 'LINK_PAGE' | 'HUNTER' | 'APOLLO' | 'PATTERN' | 'MANUAL'
+export type EmailSource = 'CHANNEL' | 'CHANNEL_VIDEO' | 'COMMENT' | 'WEBSITE' | 'LINK_PAGE' | 'HUNTER' | 'APOLLO' | 'TOMBA' | 'PROSPEO' | 'PATTERN' | 'MANUAL'
 
 export interface Findings {
   emails: Array<{ email: string; source: EmailSource; sourceUrl?: string }>

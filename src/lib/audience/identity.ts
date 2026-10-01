@@ -3,38 +3,58 @@
 // person's name or handle actually matches it. A site is accepted only if it mentions them.
 import { fetchHtml, hostOf, htmlToText, SHARED_HOSTS } from './enrich'
 import { cleanHandle } from './classify'
+import { configured, withKey, rejection, NoKeyError } from '../providers/keys'
 
 export interface SearchResult { url: string; title: string; snippet: string }
 
 export function searchProvider(): 'BRAVE' | 'SERPER' | null {
-  if (process.env.BRAVE_SEARCH_API_KEY) return 'BRAVE'
-  if (process.env.SERPER_API_KEY) return 'SERPER'
+  if (configured('brave')) return 'BRAVE'
+  if (configured('serper')) return 'SERPER'
   return null
 }
 
-export async function webSearch(q: string, country?: string | null): Promise<SearchResult[]> {
-  const cc = country && /^[a-z]{2}$/i.test(country) ? country.toLowerCase() : ''
-  const p = searchProvider()
-  if (p === 'BRAVE') {
-    const res = await fetch(`https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(q)}&count=10${cc ? `&country=${cc === 'gb' ? 'gb' : cc}` : ''}`, {
-      headers: { Accept: 'application/json', 'X-Subscription-Token': process.env.BRAVE_SEARCH_API_KEY! },
+async function braveSearch(q: string, cc: string): Promise<SearchResult[]> {
+  return withKey('brave', async (key) => {
+    const res = await fetch(`https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(q)}&count=10${cc ? `&country=${cc}` : ''}`, {
+      headers: { Accept: 'application/json', 'X-Subscription-Token': key },
       signal: AbortSignal.timeout(10_000), cache: 'no-store',
     })
-    if (!res.ok) throw new Error(`Brave search HTTP ${res.status}`)
+    if (!res.ok) throw rejection(res.status, await res.text().catch(() => '')) || new Error(`Brave search HTTP ${res.status}`)
     const d = await res.json() as { web?: { results?: Array<{ url: string; title: string; description?: string }> } }
     return (d.web?.results || []).map((r) => ({ url: r.url, title: strip(r.title), snippet: strip(r.description || '') }))
-  }
-  if (p === 'SERPER') {
+  })
+}
+
+async function serperSearch(q: string, cc: string): Promise<SearchResult[]> {
+  return withKey('serper', async (key) => {
     const res = await fetch('https://google.serper.dev/search', {
       method: 'POST',
-      headers: { 'X-API-KEY': process.env.SERPER_API_KEY!, 'Content-Type': 'application/json' },
+      headers: { 'X-API-KEY': key, 'Content-Type': 'application/json' },
       body: JSON.stringify({ q, num: 10, ...(cc ? { gl: cc === 'gb' ? 'uk' : cc } : {}) }),
       signal: AbortSignal.timeout(10_000), cache: 'no-store',
     })
-    if (!res.ok) throw new Error(`Serper HTTP ${res.status}`)
+    if (!res.ok) {
+      const text = await res.text().catch(() => '')
+      // Serper answers 400 "Not enough credits" when a key is spent
+      throw rejection(/credit/i.test(text) ? 402 : res.status, text) || new Error(`Serper HTTP ${res.status}`)
+    }
     const d = await res.json() as { organic?: Array<{ link: string; title: string; snippet?: string }> }
     return (d.organic || []).map((r) => ({ url: r.link, title: strip(r.title), snippet: strip(r.snippet || '') }))
+  })
+}
+
+/** Web search with whichever provider still has credits (Brave first, then Serper) */
+export async function webSearch(q: string, country?: string | null): Promise<SearchResult[]> {
+  const cc = country && /^[a-z]{2}$/i.test(country) ? country.toLowerCase() : ''
+  const engines = [configured('brave') && braveSearch, configured('serper') && serperSearch].filter(Boolean) as Array<typeof braveSearch>
+  let last: Error | null = null
+  for (const engine of engines) {
+    try { return await engine(q, cc) } catch (err) {
+      last = err as Error
+      if (!(err instanceof NoKeyError)) throw err
+    }
   }
+  if (last) throw last
   return []
 }
 

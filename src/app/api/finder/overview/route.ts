@@ -8,6 +8,8 @@ import { googleConfigured, googleUsage } from '@/lib/finder/places'
 import { searchProvider } from '@/lib/audience/identity'
 import { verifierProvider } from '@/lib/audience/verify'
 import { hunterAccount, hunterConfigured } from '@/lib/audience/hunter'
+import { finderProviders } from '@/lib/audience/finders'
+import { sourceConfigured, SOURCE_LABEL, type SourceId } from '@/lib/finder/sources'
 
 export async function GET() {
   const session = await requireAuth()
@@ -33,7 +35,9 @@ export async function GET() {
       google: googleConfigured(),
       search: searchProvider(),
       verifier: verifierProvider(),
-      hunter: hunter ? { remaining: hunter.remaining, available: hunter.available } : hunterConfigured() ? { remaining: null, available: null } : null,
+      hunter: hunter ? { remaining: hunter.remaining, available: hunter.available, keys: hunter.keys } : hunterConfigured() ? { remaining: null, available: null, keys: 1 } : null,
+      finders: finderProviders(),
+      sources: (['GOOGLE', 'FOURSQUARE', 'TOMTOM', 'NPI', 'OSM'] as SourceId[]).map((id) => ({ id, label: SOURCE_LABEL[id], on: sourceConfigured(id) })),
     },
   })
 }

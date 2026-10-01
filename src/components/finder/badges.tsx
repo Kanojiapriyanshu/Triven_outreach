@@ -13,7 +13,7 @@ export const BIZ_STATUS: Record<string, { label: string; className: string }> = 
 }
 
 export const SOURCE_LABEL: Record<string, string> = {
-  LISTING: 'on their map listing', WEBSITE: 'on their website', SEARCH: 'published elsewhere (web search)', HUNTER: 'Hunter',
+  LISTING: 'on their map listing', WEBSITE: 'on their website', SEARCH: 'published elsewhere (web search)', HUNTER: 'Hunter', APOLLO: 'Apollo', TOMBA: 'Tomba', PROSPEO: 'Prospeo',
   PATTERN: 'owner-name guess, verified', ROLE_GUESS: 'inbox guess, verified', MANUAL: 'added by you',
 }
 

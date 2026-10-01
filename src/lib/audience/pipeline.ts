@@ -648,7 +648,7 @@ export async function finderStep(deadline: number, settings: AudienceSettings, o
     }
   }
   const hunterLeft = () => credits > settings.hunterReserve
-  if (!hunterLeft() && !process.env.APOLLO_API_KEY) {
+  if (!hunterLeft() && !finderProviders().some((f) => f !== 'HUNTER')) {
     out.stoppedAtReserve = true
     return out
   }
@@ -715,7 +715,7 @@ export async function finderStep(deadline: number, settings: AudienceSettings, o
 
     // find: a business email for someone we can identify
     const hasVerifiedBusiness = p.emails.some((e) => e.status === 'VERIFIED' && !e.isFree)
-    if (!hasVerifiedBusiness && (hunterLeft() || process.env.APOLLO_API_KEY)) {
+    if (!hasVerifiedBusiness && (hunterLeft() || finderProviders().some((f) => f !== 'HUNTER'))) {
       const { found, notes: fNotes, outOfCredits } = await findBusinessEmail(p, { hunter: hunterLeft() })
       notes.push(...fNotes)
       if (outOfCredits) credits = 0
@@ -746,7 +746,7 @@ export async function finderStep(deadline: number, settings: AudienceSettings, o
     })
     await refreshProspects([p.id])
     await updateStatus(p.id, settings)
-    if (!hunterLeft() && !process.env.APOLLO_API_KEY) { out.stoppedAtReserve = true; break }
+    if (!hunterLeft() && !finderProviders().some((f) => f !== 'HUNTER')) { out.stoppedAtReserve = true; break }
   }
   if (Number.isFinite(credits)) out.hunterCredits = Math.max(0, credits)
   return out

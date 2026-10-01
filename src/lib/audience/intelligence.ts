@@ -167,7 +167,7 @@ export function emailConfidence(e: Pick<ProspectEmail, 'email' | 'source' | 'sta
   const reasons: string[] = []
   let s = 0
   if (PUBLISHED.includes(e.source)) { s += 45; reasons.push('published by them') }
-  else if (e.source === 'HUNTER' || e.source === 'APOLLO') { const n = Math.round((e.confidence || 50) * 0.4); s += n; reasons.push(`finder ${e.confidence ?? '?'}%`) }
+  else if (['HUNTER', 'APOLLO', 'TOMBA', 'PROSPEO'].includes(e.source)) { const n = Math.round((e.confidence || 50) * 0.4); s += n; reasons.push(`finder ${e.confidence ?? '?'}%`) }
   else { s += 30; reasons.push(e.source === 'PATTERN' ? 'verified guess' : 'found by search') }
   if (e.status === 'VERIFIED') { s += 40; reasons.push('mailbox verified') }
   else if (e.status === 'UNKNOWN') { s += 10; reasons.push('domain accepts mail') }
