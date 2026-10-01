@@ -16,7 +16,7 @@ import { budgetLeft } from '../budget'
 import { nicheOf, CHAIN_NAMES, type Niche } from './niches'
 import { getFinderSettings, type FinderSettings } from './settings'
 import { researchBusiness, ownDomain } from './research'
-import { emailTraits } from '../audience/verify'
+import { emailTraits, verifierProvider, verifyEmail } from '../audience/verify'
 import { hostOf } from '../audience/enrich'
 import { SEQUENCE_LIBRARY } from '../sequence-library'
 import { notify } from '../notify'
@@ -324,8 +324,10 @@ export function isSendable(e: Pick<BusinessEmail, 'status' | 'source' | 'verifyM
   if (e.status === 'INVALID') return false
   if (e.status === 'VERIFIED') return true
   if (s.sendPolicy !== 'VERIFIED_OR_PUBLISHED' || !e.verifyMethod) return false
-  // Published by the business itself (its site, its listing): fine even on catch-all domains
-  if (PUBLISHED.includes(e.source)) return true
+  // Published by the business itself (its site, its listing): fine even on catch-all domains. With a
+  // verifier set up, the mailbox must have been checked first: listings go stale and bounce (a
+  // domain-only "MX" check passes for a mailbox that no longer exists)
+  if (PUBLISHED.includes(e.source)) return e.verifyMethod !== 'MX' || !verifierProvider()
   return FINDERS.includes(e.source) && e.status === 'UNKNOWN' && (e.confidence || 0) >= 90
 }
 
@@ -546,6 +548,34 @@ export async function finderBacklog() {
   return { searches, research, total: searches + research }
 }
 
+/**
+ * Mailbox-check addresses that were only domain-checked (found while the verifier had no credits):
+ * a few businesses per run, best fit first, the address we would actually send to.
+ */
+export async function verifyPending(deadline: number, max = 12) {
+  const out = { checked: 0, ready: 0, stopped: '' }
+  if (!verifierProvider()) return out
+  const s = await getFinderSettings()
+  const waiting = await prisma.business.findMany({
+    where: { status: 'EMAIL_FOUND', emails: { some: { status: 'UNKNOWN', OR: [{ verifyMethod: 'MX' }, { verifyMethod: null }] } } },
+    include: { emails: true }, orderBy: [{ fitScore: 'desc' }, { createdAt: 'asc' }], take: max,
+  })
+  // Personal before role inbox, own domain before free mail, published before guessed
+  const rank = (e: BusinessEmail) => (e.isPrimary ? 1000 : 0) + (e.isRole ? 0 : 25) + (e.isFree ? 0 : 10) + (PUBLISHED.includes(e.source) ? 8 : 0)
+  for (const b of waiting) {
+    if (left(deadline) < 8_000) break
+    const e = b.emails.filter((x) => x.status === 'UNKNOWN' && (!x.verifyMethod || x.verifyMethod === 'MX')).sort((a, c) => rank(c) - rank(a))[0]
+    if (!e) continue
+    const v = await verifyEmail(e.email)
+    // Still only a domain check: the verifier is out of credits (or today's budget is spent). Try later
+    if (v.method === 'MX' && v.status === 'UNKNOWN') { out.stopped = v.detail; break }
+    await prisma.businessEmail.update({ where: { id: e.id }, data: { status: v.status, verifyMethod: v.method, verifyDetail: v.detail.slice(0, 250), checkedAt: new Date() } })
+    out.checked++
+    if (await rescore(b.id, s) === 'READY') out.ready++
+  }
+  return out
+}
+
 /** Worker entry: continue running searches, then research new businesses */
 export async function runFinder(deadline: number) {
   const result: Record<string, unknown> = {}
@@ -557,5 +587,6 @@ export async function runFinder(deadline: number) {
     result[`search:${id}`] = s?.status
   }
   result.research = await researchBatch(deadline)
+  if (left(deadline) > 12_000) result.verified = await verifyPending(deadline)
   return result
 }

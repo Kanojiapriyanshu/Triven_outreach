@@ -202,6 +202,8 @@ async function researchWebsite(site: string, niche: Niche | null, r: Research, d
   return domain
 }
 
+const CONTACT_DB = /(^|\.)(leadiq\.com|prospeo\.io|rocketreach\.co|zoominfo\.com|apollo\.io|hunter\.io|signalhire\.com|contactout\.com|lusha\.com|datanyze\.com|seamless\.ai|clearbit\.com|crunchbase\.com|email-format\.com|snov\.io|aeroleads\.com|anymailfinder\.com|salesintel\.io|adapt\.io|swordfish\.ai|kaspr\.io|uplead\.com|getprospect\.com|findymail\.com|skrapp\.io|tomba\.io|voilanorbert\.com|emailsherlock\.com|theorg\.com|dnb\.com|6sense\.com|growjo\.com|cience\.com|lead411\.com|contactrocket\.ai|leadfinder\.[a-z]+)$/i
+
 /** Pages elsewhere that mention an address at their domain (directories, chambers, PDFs) */
 async function searchEmails(name: string, city: string | undefined, domain: string, country: string | undefined, r: Research) {
   // Serper's free plan rejects any query containing a quoted domain, so the business name leads;
@@ -216,6 +218,8 @@ async function searchEmails(name: string, city: string | undefined, domain: stri
       calls++
       for (const res of results) {
         const text = `${res.title} ${res.snippet}`
+        // Contact databases print a company's email *format* ("j.doe@…"), not a real mailbox
+        if (CONTACT_DB.test(hostOf(res.url)) || /email format|email pattern|email address format/i.test(text)) continue
         for (const raw of text.match(/[a-z0-9._%+-]+@[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,24}/gi) || []) {
           const email = normalizeEmail(raw)
           if (!isUsableEmail(email)) continue

@@ -30,6 +30,8 @@ export interface ProviderSpec {
   /** Calls allowed per key per month / per day before we stop on our own (free-plan defaults) */
   monthly?: number
   daily?: number
+  /** When an empty key comes back, for services we don't cap ourselves (default: next month) */
+  resets?: 'daily'
   signup: string
   /** Shape of the key when it isn't a single token */
   keyHint?: string
@@ -45,7 +47,7 @@ export const PROVIDERS: ProviderSpec[] = [
   { id: 'tomba', label: 'Tomba', kind: 'finder', env: 'TOMBA_API_KEY', use: 'Email of a named person, or addresses at a domain', free: '~25 searches a month (5 a day)', monthly: 25, daily: 5, signup: 'https://app.tomba.io/auth/register', keyHint: 'key:secret (ta_…:ts_…)' },
   { id: 'prospeo', label: 'Prospeo', kind: 'finder', env: 'PROSPEO_API_KEY', use: 'Verified email of a named person at a company', free: '~75 credits a month (charged only when found)', monthly: 75, signup: 'https://prospeo.io' },
   { id: 'apollo', label: 'Apollo', kind: 'finder', env: 'APOLLO_API_KEY', use: 'Email of a named person', free: 'Limited on the free plan', signup: 'https://www.apollo.io' },
-  { id: 'reoon', label: 'Reoon', kind: 'verifier', env: 'REOON_API_KEY', use: 'Confirms a mailbox exists', free: '~600 checks a month (20 a day)', daily: 20, signup: 'https://www.reoon.com/email-verifier/' },
+  { id: 'reoon', label: 'Reoon', kind: 'verifier', env: 'REOON_API_KEY', use: 'Confirms a mailbox exists', free: '~600 checks a month (20 a day)', resets: 'daily', signup: 'https://www.reoon.com/email-verifier/' },
   { id: 'zerobounce', label: 'ZeroBounce', kind: 'verifier', env: 'ZEROBOUNCE_API_KEY', use: 'Confirms a mailbox exists', free: '100 checks a month', monthly: 100, signup: 'https://www.zerobounce.net' },
   { id: 'millionverifier', label: 'MillionVerifier', kind: 'verifier', env: 'MILLIONVERIFIER_API_KEY', use: 'Confirms a mailbox exists', free: 'Trial credits, then pay as you go', signup: 'https://www.millionverifier.com' },
   { id: 'neverbounce', label: 'NeverBounce', kind: 'verifier', env: 'NEVERBOUNCE_API_KEY', use: 'Confirms a mailbox exists', free: 'Trial credits, then pay as you go', signup: 'https://neverbounce.com' },
@@ -132,7 +134,7 @@ function nextReset(id: ProviderId, kind: KeyRejected['kind']) {
   const now = new Date()
   if (kind === 'rate') return new Date(now.getTime() + 3 * 60_000)
   if (kind === 'auth') return new Date(now.getTime() + 24 * 3_600_000)
-  if (cap(id, 'daily')) return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1))
+  if (cap(id, 'daily') || SPEC.get(id)!.resets === 'daily') return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1))
   return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1))
 }
 

@@ -19,6 +19,9 @@ const JUNK_DOMAINS = /(^|\.)(example\.(com|org|net)|domain\.com|email\.com|yourd
 const JUNK_LOCAL = /^(noreply|no-reply|donotreply|do-not-reply|mailer-daemon|postmaster|abuse|webmaster|hostmaster|privacy|legal|dmca|copyright|user|username|name|yourname|your\.name|firstname|first\.last|email|example|test|john\.doe|jane\.doe|johndoe|someone|you)$/i
 export const ROLE_LOCAL = /^(info|hello|hi|contact|admin|office|team|support|help|sales|enquiries|inquiries|mail|business|partnerships?|collab|collabs|press|media|marketing|careers|jobs|hr|billing|accounts|booking|bookings)$/i
 
+// Email-format examples shown by contact databases ("j.doe@company.com", "firstlast@company.com")
+const FORMAT_EXAMPLE = /^(first[._-]?last|firstname[._-]?lastname|first[._-]?initial[._-]?last|f[._-]?last|flastname|first|last|firstname|lastname|j[._-]?doe|jane[._-]?doe|john[._-]?doe|doe[._-]?j(ohn|ane)?|j[._-]?smith|john[._-]?smith|jane[._-]?smith)$/i
+
 // Sample addresses left in contact forms and templates
 const PLACEHOLDER = /^(john|jane|joe|jon|name|first|firstname)[._]?(smith|doe|last|lastname)?@(smith|doe|example|email|mail|company|domain|website|address)\.(com|org|net)$|^(your|my|name|email|e-mail|mail|someone|you|user|example|hello|info)@(email|e-mail|mail|address|emailaddress|domain|example|yourdomain|yourcompany|website|company|site|yoursite|yourwebsite)\.(com|org|net)$/i
 
@@ -32,7 +35,7 @@ export function normalizeEmail(raw: string) {
 export function isUsableEmail(email: string) {
   if (!EMAIL_RE.test(email) || email.length > 80) return false
   const [local, domain] = email.split('@')
-  if (JUNK_DOMAINS.test(domain) || JUNK_LOCAL.test(local) || PLACEHOLDER.test(email)) return false
+  if (JUNK_DOMAINS.test(domain) || JUNK_LOCAL.test(local) || PLACEHOLDER.test(email) || FORMAT_EXAMPLE.test(local)) return false
   if (/^[0-9a-f]{16,}$/.test(local)) return false // hashed tracking ids
   if (/\.(png|jpe?g|gif|webp|svg|css|js)$/i.test(email)) return false
   return true
