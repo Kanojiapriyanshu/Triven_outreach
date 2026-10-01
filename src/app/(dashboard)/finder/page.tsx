@@ -329,8 +329,8 @@ function ServiceStrip({ overview, onSettings }: { overview?: Overview; onSetting
   if (!overview) return null
   const s = overview.services
   const chips: Array<{ on: boolean; label: string; detail: string; hint: string }> = [
-    { on: s.google, label: 'Google Maps', detail: s.google ? `${overview.google.used}/${overview.google.cap} calls this month` : 'add GOOGLE_PLACES_API_KEY', hint: 'Best coverage: ratings, reviews, hours. Free up to ~1,000 searches a month (20 businesses each); the app stops at your cap.' },
-    ...s.sources.filter((x) => x.id === 'FOURSQUARE' || x.id === 'TOMTOM').map((x) => ({ on: x.on, label: x.label, detail: x.on ? 'connected' : `add ${x.id}_API_KEY`, hint: x.id === 'FOURSQUARE' ? 'Its own business data with website, phone and often an email. 10,000 free searches a month.' : 'Its own business data with website and phone. 2,500 free searches a day.' })),
+    ...(s.google ? [{ on: true, label: 'Google Maps', detail: `${overview.google.used}/${overview.google.cap} calls this month`, hint: 'Best coverage: ratings, reviews, hours. Free up to ~1,000 searches a month (20 businesses each); the app stops at your cap.' }] : []),
+    ...s.sources.filter((x) => x.on && (x.id === 'FOURSQUARE' || x.id === 'TOMTOM')).map((x) => ({ on: true, label: x.label, detail: 'connected', hint: x.id === 'FOURSQUARE' ? 'Its own business data with website, phone and often an email. 10,000 free searches a month.' : 'Its own business data with website and phone. 2,500 free searches a day.' })),
     { on: true, label: 'NPI Registry + OpenStreetMap', detail: 'free, no key', hint: 'Always available. NPI lists every US health practice (dentists, chiropractors…) with phone and official contact; OpenStreetMap sometimes has the email.' },
     { on: !!s.search, label: 'Web search', detail: s.search ? s.search.toLowerCase() : 'add SERPER_API_KEY', hint: 'Finds emails published outside their site and the owner\'s LinkedIn title (LinkedIn itself is never scraped).' },
     { on: s.finders.length > 0, label: 'Email finders', detail: s.finders.length ? `${s.finders.map((f) => f.toLowerCase()).join(' + ')}${s.hunter?.remaining != null ? ` · Hunter ${s.hunter.remaining} credits${s.hunter.keys > 1 ? ` on ${s.hunter.keys} keys` : ''}` : ''}` : 'optional', hint: 'Hunter, Apollo, Prospeo and Tomba, tried one after another and only when the website has nothing. Each key\'s usage is tracked on System Health.' },
@@ -392,7 +392,7 @@ function NewSearch({ overview, onDone }: { overview?: Overview; onDone: (searchI
               {groups.map((g) => (
                 <optgroup key={g} label={g}>{NICHES.filter((n) => n.group === g).map((n) => <option key={n.id} value={n.id}>{n.label}</option>)}</optgroup>
               ))}
-              <option value="__custom">Something else (Google only)…</option>
+              <option value="__custom">Something else…</option>
             </select>
             {niche === '__custom' && <Input value={custom} onChange={(e) => setCustom(e.target.value)} placeholder="e.g. wedding venue" className="h-9" />}
             <div className="flex gap-2">
@@ -401,7 +401,7 @@ function NewSearch({ overview, onDone }: { overview?: Overview; onDone: (searchI
               </select>
               <select value={src} onChange={(e) => setProvider(e.target.value)} className="h-9 rounded-lg border border-slate-300 px-2 text-sm" title="All sources runs every source that fits this search and merges duplicates">
                 <option value="AUTO">All sources (best)</option>
-                {sources.map((x) => <option key={x.id} value={x.id} disabled={!x.on}>{x.label}{x.on ? '' : ' (no key)'}</option>)}
+                {sources.filter((x) => x.on).map((x) => <option key={x.id} value={x.id}>{x.label}</option>)}
               </select>
             </div>
           </div>

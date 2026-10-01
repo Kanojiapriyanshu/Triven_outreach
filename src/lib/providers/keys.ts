@@ -42,7 +42,7 @@ export const PROVIDERS: ProviderSpec[] = [
   { id: 'serper', label: 'Serper (Google search)', kind: 'search', env: 'SERPER_API_KEY', use: 'Finds a business\'s website, emails published elsewhere, the owner\'s name', free: '2,500 searches once', signup: 'https://serper.dev' },
   { id: 'brave', label: 'Brave Search', kind: 'search', env: 'BRAVE_SEARCH_API_KEY', use: 'Same as Serper, and allows "@domain" searches', free: 'Free monthly searches', signup: 'https://brave.com/search/api/' },
   { id: 'hunter', label: 'Hunter', kind: 'finder', env: 'HUNTER_API_KEY', use: 'Email of a named person, or the owner at a domain', free: '~25 searches a month', signup: 'https://hunter.io/users/sign_up' },
-  { id: 'tomba', label: 'Tomba', kind: 'finder', env: 'TOMBA_API_KEY', use: 'Email of a named person, or addresses at a domain', free: '~25 searches a month', monthly: 25, signup: 'https://app.tomba.io/auth/register', keyHint: 'key:secret (ta_…:ts_…)' },
+  { id: 'tomba', label: 'Tomba', kind: 'finder', env: 'TOMBA_API_KEY', use: 'Email of a named person, or addresses at a domain', free: '~25 searches a month (5 a day)', monthly: 25, daily: 5, signup: 'https://app.tomba.io/auth/register', keyHint: 'key:secret (ta_…:ts_…)' },
   { id: 'prospeo', label: 'Prospeo', kind: 'finder', env: 'PROSPEO_API_KEY', use: 'Verified email of a named person at a company', free: '~75 credits a month (charged only when found)', monthly: 75, signup: 'https://prospeo.io' },
   { id: 'apollo', label: 'Apollo', kind: 'finder', env: 'APOLLO_API_KEY', use: 'Email of a named person', free: 'Limited on the free plan', signup: 'https://www.apollo.io' },
   { id: 'reoon', label: 'Reoon', kind: 'verifier', env: 'REOON_API_KEY', use: 'Confirms a mailbox exists', free: '~600 checks a month (20 a day)', daily: 20, signup: 'https://www.reoon.com/email-verifier/' },
@@ -85,8 +85,10 @@ export class NoKeyError extends Error {
 export function rejection(status: number, message = ''): KeyRejected | null {
   const m = message.slice(0, 200)
   if (status === 401 || /invalid.{0,12}(api )?key|api.?key.{0,20}(invalid|not found|missing)|unauthori[sz]ed|auth(entication)?.fail/i.test(m)) return new KeyRejected(m || `HTTP ${status}`, 'auth')
+  // "Too fast" is checked before "out of credits": "Rate limit exceeded (rpm)" is a short rest, not an empty account
+  if (/too many requests|rate.?limit|throttl|\b(rps|rpm)\b|per (second|minute)/i.test(m)) return new KeyRejected(m || `HTTP ${status}`, 'rate')
   if (status === 402 || /insufficient|out of credits?|no credits?|ran out|credits? (left|remaining|balance).{0,6}\b0\b|quota|usage limit|limit (reached|exceeded)|exceeded.{0,20}limit|over the limit/i.test(m)) return new KeyRejected(m || `HTTP ${status}`, 'quota')
-  if (status === 429 || /too many requests|rate.?limit|throttl/i.test(m)) return new KeyRejected(m || `HTTP ${status}`, 'rate')
+  if (status === 429) return new KeyRejected(m || `HTTP ${status}`, 'rate')
   if (status === 403) return new KeyRejected(m || 'HTTP 403', 'auth')
   return null
 }

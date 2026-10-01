@@ -21,20 +21,22 @@ interface Data {
   queues: { audience: { total: number }; finder: { total: number }; followUpsDue: number; followUpsOverdue: number }
   errors: Array<{ action: string; startedAt: string; error: string | null }>
   scheduler: { url: string; autoUrl: string; header: string; secretSet: boolean }
-  providers: Provider[]
+  services: Service[]
 }
-interface Provider {
-  id: string; label: string; kind: 'discovery' | 'search' | 'finder' | 'verifier'; env: string; use: string; free: string; signup: string; keyHint?: string
-  state: 'OK' | 'EXHAUSTED' | 'ERROR' | 'OFF'; usedMonth: number; capMonth: number | null
-  keys: Array<{ label: string; usedMonth: number; usedToday: number; left: number | null; blockedUntil: string | null; reason: string | null }>
+interface Service {
+  id: string; label: string; kind: 'discovery' | 'search' | 'finder' | 'verifier'; use: string; why: string
+  state: 'OK' | 'PAUSED' | 'EXHAUSTED' | 'ERROR' | 'FREE'
+  left: number | null; total: number | null; unit: string; renews: string | null; renewNote: string; live: boolean
+  keys: Array<{ label: string; left: number | null; paused: string | null; reason: string | null }>
 }
 
-const KIND_LABEL: Record<Provider['kind'], string> = { discovery: 'Find businesses', search: 'Web search', finder: 'Find emails', verifier: 'Check emails' }
-const PROVIDER_STATE: Record<Provider['state'], { label: string; className: string }> = {
+const KIND_LABEL: Record<Service['kind'], string> = { discovery: 'Finding businesses', search: 'Web search', finder: 'Finding emails', verifier: 'Checking emails' }
+const SERVICE_STATE: Record<Service['state'], { label: string; className: string }> = {
   OK: { label: 'working', className: 'bg-emerald-50 text-emerald-700' },
+  FREE: { label: 'free, unlimited', className: 'bg-emerald-50 text-emerald-700' },
+  PAUSED: { label: 'resting, resumes on its own', className: 'bg-sky-50 text-sky-700' },
   EXHAUSTED: { label: 'used up', className: 'bg-amber-50 text-amber-700' },
   ERROR: { label: 'key rejected', className: 'bg-red-50 text-red-700' },
-  OFF: { label: 'no key', className: 'bg-slate-100 text-slate-500' },
 }
 
 const ACTION_LABEL: Record<string, string> = { tick: 'Send & replies', audience: 'Audience pipeline', finder: 'Lead Finder' }
@@ -107,7 +109,7 @@ export default function SystemPage() {
       </Card>
 
       {/* Data sources */}
-      {data?.providers && <DataSources providers={data.providers} />}
+      {data?.services && <DataSources services={data.services} />}
 
       {/* Campaign capacity */}
       <Card>
@@ -173,51 +175,72 @@ export default function SystemPage() {
   )
 }
 
-function DataSources({ providers }: { providers: Provider[] }) {
+/** "in 6 days (7 Oct)" · "tomorrow" · "in 5 hours" */
+function renewsIn(iso: string) {
+  const ms = new Date(iso).getTime() - Date.now()
+  const date = new Date(iso).toLocaleDateString('en-US', { day: 'numeric', month: 'short' })
+  if (ms <= 0) return 'now'
+  const hours = Math.round(ms / 3_600_000)
+  if (hours < 24) return `in ${Math.max(1, hours)} hour${hours === 1 ? '' : 's'}`
+  const days = Math.round(hours / 24)
+  return `${days === 1 ? 'tomorrow' : `in ${days} days`} (${date})`
+}
+
+function DataSources({ services }: { services: Service[] }) {
   const kinds = ['discovery', 'search', 'finder', 'verifier'] as const
+  const low = services.filter((x) => x.state === 'EXHAUSTED' || x.state === 'ERROR')
   return (
-    <Card>
+    <Card className={low.length ? 'border-amber-300' : ''}>
       <CardHeader className="pb-2">
-        <CardTitle className="flex items-center gap-2"><Database className="h-4 w-4 text-slate-400" />Data sources
-          <span className="text-sm font-normal text-slate-500">· {providers.filter((p) => p.state === 'OK').length} working, plus NPI Registry and OpenStreetMap (free, no key)</span>
+        <CardTitle className="flex items-center gap-2"><Database className="h-4 w-4 text-slate-400" />Services in use
+          <span className="text-sm font-normal text-slate-500">· {services.length} set up{low.length ? `, ${low.length} need${low.length === 1 ? 's' : ''} attention` : ', all working'}</span>
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
         <p className="text-xs text-slate-500">
-          Each source is used until its free allowance is gone, then the next one takes over. To add a key: Vercel → Settings → Environment Variables, then redeploy.
-          Several keys for one source go in the same variable, separated by commas.
+          What each service does for you, how many credits it has left and when they come back. When one runs out, the next one in its group takes over on its own.
         </p>
-        {kinds.map((kind) => (
+        {kinds.filter((kind) => services.some((x) => x.kind === kind)).map((kind) => (
           <div key={kind}>
             <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500">{KIND_LABEL[kind]}</p>
             <div className="divide-y divide-slate-100 rounded-lg border border-slate-200">
-              {providers.filter((p) => p.kind === kind).map((p) => (
-                <div key={p.id} className="flex flex-wrap items-start gap-x-4 gap-y-1 px-3 py-2">
-                  <div className="min-w-0 flex-1">
-                    <p className="text-sm text-slate-800">
-                      <span className="font-medium">{p.label}</span>
-                      <span className={`ml-2 rounded-full px-2 py-0.5 text-[11px] font-medium ${PROVIDER_STATE[p.state].className}`}>{PROVIDER_STATE[p.state].label}</span>
-                    </p>
-                    <p className="text-xs text-slate-500">{p.use}. Free: {p.free}.</p>
-                    {p.state === 'OFF' && (
-                      <p className="mt-0.5 text-[11px] text-slate-400">
-                        <a href={p.signup} target="_blank" rel="noreferrer" className="text-indigo-600 hover:underline">Get a key</a> and add it as <code className="rounded bg-slate-100 px-1">{p.env}</code>{p.keyHint ? ` (${p.keyHint})` : ''}
+              {services.filter((x) => x.kind === kind).map((x) => {
+                const pct = x.left !== null && x.total ? Math.max(0, Math.min(100, Math.round((100 * x.left) / x.total))) : null
+                return (
+                  <div key={x.id} className="grid gap-x-6 gap-y-2 px-3 py-2.5 sm:grid-cols-[1fr_260px]">
+                    <div className="min-w-0">
+                      <p className="text-sm text-slate-800">
+                        <span className="font-medium">{x.label}</span>
+                        <span className={`ml-2 rounded-full px-2 py-0.5 text-[11px] font-medium ${SERVICE_STATE[x.state].className}`}>{SERVICE_STATE[x.state].label}</span>
                       </p>
-                    )}
-                  </div>
-                  {p.keys.length > 0 && (
-                    <div className="text-right text-[11px] text-slate-500">
-                      <p className="tabular-nums text-slate-700">{p.usedMonth.toLocaleString('en-US')}{p.capMonth ? ` / ${p.capMonth.toLocaleString('en-US')}` : ''} used this month</p>
-                      {p.keys.map((k) => (
-                        <p key={k.label} className={k.blockedUntil ? 'text-amber-700' : ''} title={k.reason || undefined}>
-                          key {k.label}: {k.blockedUntil ? `paused until ${new Date(k.blockedUntil).toLocaleString('en-US', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' })}` : k.left !== null ? `${k.left.toLocaleString('en-US')} left` : `${k.usedMonth.toLocaleString('en-US')} used`}
-                        </p>
+                      <p className="mt-0.5 text-xs text-slate-600"><span className="font-medium text-slate-700">{x.use}.</span> {x.why}</p>
+                      {x.keys.filter((k) => k.paused).map((k) => (
+                        <p key={k.label} className="mt-0.5 text-[11px] text-amber-700">Key {k.label} paused until {new Date(k.paused!).toLocaleString('en-US', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' })}{k.reason ? `: ${k.reason}` : ''}</p>
                       ))}
-                      {p.keys.find((k) => k.reason) && <p className="max-w-[260px] truncate text-amber-700">{p.keys.find((k) => k.reason)!.reason}</p>}
                     </div>
-                  )}
-                </div>
-              ))}
+                    <div className="text-xs">
+                      {x.state === 'FREE' ? (
+                        <p className="text-slate-500">{x.renewNote}</p>
+                      ) : (
+                        <>
+                          <p className="tabular-nums text-slate-800">
+                            <span className={`text-base font-semibold ${x.left === 0 ? 'text-red-600' : pct !== null && pct <= 15 ? 'text-amber-600' : 'text-slate-900'}`}>{x.left !== null ? x.left.toLocaleString('en-US') : '—'}</span>
+                            {x.total ? <span className="text-slate-400"> / {x.total.toLocaleString('en-US')}</span> : null} {x.unit} left
+                          </p>
+                          {pct !== null && (
+                            <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-slate-100">
+                              <div className={`h-full rounded-full ${pct <= 15 ? 'bg-amber-400' : 'bg-emerald-400'}`} style={{ width: `${pct}%` }} />
+                            </div>
+                          )}
+                          <p className="mt-1 text-[11px] text-slate-500">{x.renews ? <>Renews <span className="font-medium text-slate-700">{renewsIn(x.renews)}</span> · </> : null}{x.renewNote}</p>
+                          {x.keys.length > 1 && <p className="text-[11px] text-slate-400">{x.keys.map((k) => `key ${k.label}: ${k.left ?? '—'}`).join(' · ')}</p>}
+                          {!x.live && x.left !== null && <p className="text-[11px] text-slate-400">Counted by this app</p>}
+                        </>
+                      )}
+                    </div>
+                  </div>
+                )
+              })}
             </div>
           </div>
         ))}
