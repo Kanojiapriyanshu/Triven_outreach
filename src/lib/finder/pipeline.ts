@@ -305,7 +305,8 @@ async function researchOne(b: Business, s: FinderSettings, deadline: number) {
       ownerTitle: b.ownerTitle || r.ownerTitle || null,
       ownerSource: b.ownerSource || r.ownerSource || null,
       techSignals: r.techSignals,
-      siteFacts: r.siteFacts,
+      // What they said on YouTube is not on their website: keep it through research
+      siteFacts: [...b.siteFacts.filter((f) => f.startsWith('Said on YouTube')), ...r.siteFacts],
       searchLog: r.log.join('\n'),
       enrichedAt: new Date(),
     },
@@ -369,6 +370,7 @@ export function scoreBusiness(b: Business, emails: BusinessEmail[], s: FinderSet
   if (/Text us/i.test(facts)) add(4, 'phones are hard to keep up with')
   if (/special/i.test(facts)) add(3, 'paying to make the phone ring')
   if (/Spanish/i.test(facts)) add(2, 'bilingual callers')
+  if (/Said on YouTube/.test(facts)) add(15, 'told us about their missed calls (YouTube comment)')
   if (b.ownerName) add(5, `decision maker known (${b.ownerName})`)
   if (b.techSignals.some((t) => /competitor/i.test(t))) add(-15, 'already has an answering service / AI receptionist')
   else if (b.techSignals.length) add(2, 'already pays for customer tech')
@@ -498,7 +500,7 @@ export async function pushBusinesses(ids: string[], target: { campaignId?: strin
       industry: niche?.label || b.category,
       subIndustry: b.category,
       campaignId,
-      leadSource: b.source === 'OSM' ? 'OSM' : b.source === 'GOOGLE' ? 'GOOGLE_MAPS' : 'OTHER',
+      leadSource: b.source === 'OSM' ? 'OSM' : b.source === 'GOOGLE' ? 'GOOGLE_MAPS' : b.source === 'YOUTUBE' ? 'YOUTUBE' : 'OTHER',
       status: 'READY_TO_CONTACT',
       priority: b.tier === 'HOT' ? 'HIGH' : b.tier === 'WARM' ? 'MEDIUM' : 'LOW',
       score: b.fitScore,

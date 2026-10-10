@@ -480,6 +480,7 @@ model AudienceVideo {
   score             Int       @default(0) // audience-fit score (0-100)
   scoreReasons      String?   @db.Text
   interestCategory  String? // topic of the video → default interest of its commenters
+  track             String    @default("BUILDER") // BUILDER (AI Builder audience) | BUYER (business owners who miss calls)
   status            String    @default("DISCOVERED") // DISCOVERED | QUEUED | COLLECTING | DONE | SKIPPED | ERROR
   commentsCollected Int       @default(0)
   maxComments       Int       @default(2000)
@@ -663,6 +664,43 @@ model ProspectEmail {
 // ─────────────────────────────────────────────────────────────────────────────
 
 // One search: a niche across one or more locations. Runs in pages, resumable across worker ticks
+// People who say, under a YouTube video, that their business misses calls: buyers of the AI
+// receptionist. Kept apart from Prospect (the AI Builder audience), whose scoring is the opposite.
+model BuyerProspect {
+  id                 String    @id @default(cuid())
+  youtubeChannelId   String    @unique
+  displayName        String
+  handle             String?
+  avatarUrl          String?
+  channelDescription String?   @db.Text
+  country            String?
+  location           String? // US state or city they mention
+  businessName       String? // channel name that is a company or a trade ("Mike's Plumbing")
+  website            String? // business site linked from their channel
+  trade              String? // Lead Finder niche id (hvac, plumber, dental…)
+  score              Int       @default(0) // phrase points: +5 high, +3 medium, +1 low, -5 negative
+  tier               String    @default("C") // A = reach out · B = reply publicly · C = ignore
+  signals            String[]  @default([])
+  evidence           String[]  @default([])
+  commentCount       Int       @default(0)
+  bestCommentId      String? // AudienceComment.youtubeCommentId
+  bestCommentText    String?   @db.Text
+  bestVideoId        String? // AudienceVideo.id of that comment
+  lastCommentAt      DateTime?
+  checkedAt          DateTime? // channel page read for business signals
+  businessId         String? // Lead Finder business created from a Tier A person
+  replyStatus        String    @default("NONE") // NONE | TODO | SENT | RESPONDED | SKIPPED
+  replySentAt        DateTime?
+  nextStep           String?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  @@index([tier])
+  @@index([score])
+  @@index([replyStatus])
+  @@map("buyer_prospects")
+}
+
 model LeadSearch {
   id          String    @id @default(cuid())
   query       String // what was searched ("dentist")

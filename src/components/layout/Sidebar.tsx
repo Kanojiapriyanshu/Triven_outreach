@@ -23,12 +23,13 @@ import {
   BarChart3,
   Kanban,
   UserCog,
+  PhoneMissed,
   type LucideIcon,
 } from 'lucide-react'
 import useSWR from 'swr'
 import { cn } from '@/lib/utils'
 
-interface NavItem { label: string; href: string; icon: LucideIcon; exact?: boolean; badge?: 'unread' | 'finderReady' | 'prospectsReady' }
+interface NavItem { label: string; href: string; icon: LucideIcon; exact?: boolean; badge?: 'unread' | 'finderReady' | 'prospectsReady' | 'buyersToReply' }
 
 const sections: Array<{ title: string; items: NavItem[] }> = [
   {
@@ -44,6 +45,7 @@ const sections: Array<{ title: string; items: NavItem[] }> = [
     title: 'Prospecting',
     items: [
       { label: 'Lead Finder', href: '/finder', icon: MapPinned, badge: 'finderReady' },
+      { label: 'Receptionist buyers', href: '/audience/buyers', icon: PhoneMissed, badge: 'buyersToReply' },
       { label: 'Audience', href: '/audience', icon: Radar, exact: true },
       { label: 'Discover', href: '/audience/discover', icon: Telescope },
       { label: 'Prospects', href: '/audience/prospects', icon: UserSearch, badge: 'prospectsReady' },
@@ -79,7 +81,7 @@ async function handleLogout() {
 
 export default function Sidebar({ userName }: { userName?: string }) {
   const pathname = usePathname()
-  const { data: counts } = useSWR<{ unread: number; finderReady: number; prospectsReady: number }>('/api/nav', (u: string) => fetch(u).then((r) => r.json()), { refreshInterval: 60_000 })
+  const { data: counts } = useSWR<{ unread: number; finderReady: number; prospectsReady: number; buyersToReply: number }>('/api/nav', (u: string) => fetch(u).then((r) => r.json()), { refreshInterval: 60_000 })
   const initials = (userName || 'T').split(/\s+/).map((w) => w[0]).slice(0, 2).join('').toUpperCase()
 
   return (
@@ -115,7 +117,7 @@ export default function Sidebar({ userName }: { userName?: string }) {
                     <Icon className={cn('h-4 w-4 shrink-0', isActive ? 'text-brand-gold' : 'text-slate-500 group-hover:text-slate-300')} />
                     <span className="flex-1">{label}</span>
                     {count > 0 && (
-                      <span title={badge === 'unread' ? 'Unread replies' : 'Ready to add to a campaign'}
+                      <span title={badge === 'unread' ? 'Unread replies' : badge === 'buyersToReply' ? 'Waiting for a public reply' : 'Ready to add to a campaign'}
                         className={cn('rounded-full px-1.5 text-[10px] font-semibold leading-4', badge === 'unread' ? 'bg-brand-gold text-ink' : 'bg-white/10 text-slate-200')}>
                         {count > 999 ? '999+' : count}
                       </span>

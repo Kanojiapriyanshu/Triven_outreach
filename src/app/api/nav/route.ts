@@ -6,10 +6,11 @@ import prisma from '@/lib/prisma'
 export async function GET() {
   const session = await requireAuth()
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  const [unread, finderReady, prospectsReady] = await Promise.all([
+  const [unread, finderReady, prospectsReady, buyersToReply] = await Promise.all([
     prisma.emailMessage.count({ where: { direction: 'INBOUND', isRead: false } }),
     prisma.business.count({ where: { status: 'READY' } }),
     prisma.prospect.count({ where: { status: 'READY_TO_CONTACT' } }),
+    prisma.buyerProspect.count({ where: { replyStatus: 'TODO' } }),
   ])
-  return NextResponse.json({ unread, finderReady, prospectsReady })
+  return NextResponse.json({ unread, finderReady, prospectsReady, buyersToReply })
 }

@@ -222,6 +222,44 @@ coordinated comments are flagged.
 
 ---
 
+## 8b. Receptionist buyers (business owners who miss calls)
+
+A second YouTube track, separate from the AI Builder audience and scored the opposite way: here
+"how do I build an agent" is a reason to skip. Page: **Prospecting → Receptionist buyers**.
+
+1. **Find videos.** 60 ready-made searches in four groups (missed calls, by trade, other niches,
+   competitor reviews), or your own. Each search costs 100 YouTube units. Results that are off-topic
+   or have fewer than 5 comments are dropped; videos with 5K-200K views and a recent upload date
+   score highest; videos made by people *selling* AI receptionists score low (their comments are
+   mostly paid or bots).
+2. **Read comments.** Tick videos, then "Read queued videos" (or the background worker does it).
+3. **Scoring** per comment: +5 for each high-intent phrase ("I miss so many calls", "can't answer
+   the phone while…", "lost a job because…", "customers go to voicemail", "looking for a
+   receptionist", "what do you use for calls?", "too expensive" about Ruby / Smith.ai, "no one
+   called me back"), +3 medium ("I run a … business", "my crew", one-man operation, after hours /
+   job site, booking, would pay someone to answer), +1 low, -5 for builders, students, agencies and
+   non-English. A high phrase only counts when the person is talking about **their own** business:
+   "small businesses miss calls" and "this AI receptionist sounds useful" score nothing. The same
+   text posted by several accounts is treated as spam.
+4. **Check.** For people with a high-intent comment the public channel page is read (1 YouTube unit
+   per 50 people): is the name a business, is there a business website, a US location?
+5. **Tiers.** A = high intent + business name or website. B = high intent only. C = ignored (not
+   shown; people outside the US and Canada are C).
+6. **Tier A** becomes a Lead Finder business (source "YouTube comment", +15 fit for having told us
+   about missed calls). The normal research then finds the business's own public email, checks the
+   mailbox and it goes to its niche campaign. Personal emails are never looked up from a comment.
+7. **Tier B** goes on the "Reply publicly" list with the comment, a link to it and a suggested
+   reply (helpful, no pitch, no link; several wordings so no two are the same). **You post the reply
+   yourself**; the app never posts to YouTube. Then mark "I posted it", "They answered", add a next
+   step, or "I found their business" (website, or name + city) to move them to Tier A.
+   Keep to 10-15 replies a day; the page counts them.
+8. **Weekly review** (Videos tab): per video, comments read, Tier A, Tier B, replies sent and
+   answers. Keep the searches behind the videos at the top and drop the rest.
+
+Expect small numbers: real owners describing a phone problem are a few per hundred comments.
+
+---
+
 ## 9. Lead Finder (local businesses)
 
 Finds local businesses that fit an AI receptionist and the best email for each.

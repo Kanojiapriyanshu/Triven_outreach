@@ -30,6 +30,7 @@ import { recomputeIntelligence, getCapabilities } from './intelligence'
 import { loadExclusions, isExcluded, detectCoordination } from './quality'
 import { autoPushReady } from './routing'
 import { budgetLeft, spend } from '../budget'
+import { ingestBuyerComments, buyerStep } from './buyers'
 
 const left = (deadline: number) => deadline - Date.now()
 
@@ -189,7 +190,7 @@ async function collectDevArticle(video: IngestVideo & { youtubeVideoId: string; 
   }
 }
 
-interface IngestVideo { id: string; title: string; platform: string; interestCategory: string | null }
+interface IngestVideo { id: string; title: string; platform: string; interestCategory: string | null; track?: string }
 interface IngestComment {
   externalId: string; authorExternalId: string; authorName: string; avatarUrl: string | null
   text: string; likeCount: number; replyCount: number; parentId: string | null; publishedAt: Date | null
@@ -208,6 +209,8 @@ export async function ingestComments(video: IngestVideo, comments: IngestComment
   const excl = await loadExclusions()
   const fresh = comments.filter((c) => !seen.has(c.externalId) && !isExcluded(excl, { channelId: c.authorExternalId, name: c.authorName }))
   if (!fresh.length) return { inserted: 0, newProspects: 0 }
+  // Receptionist-buyer videos are scored with the opposite rules and kept in their own table
+  if (video.track === 'BUYER') return ingestBuyerComments(video, fresh)
 
   // Prospects: one per author, however many comments they left
   const authors = new Map<string, IngestComment>()
@@ -1043,6 +1046,7 @@ export async function runAudiencePipeline(deadline: number, only?: PipelineStep)
     }
   }
   if (!only || only === 'collect') result.collect = await collectComments(only ? deadline : share(0.35))
+  if (!only || only === 'collect') result.buyers = await buyerStep(only ? deadline : share(0.25)).catch((e) => ({ error: (e as Error).message }))
   if (!only || only === 'review') result.review = await aiReview(only ? deadline : share(0.3), settings)
   if (!only || only === 'enrich') result.enrich = await enrichProspects(only ? deadline : share(0.5), settings)
   if (!only || only === 'identity') result.identity = await identityStep(only ? deadline : share(0.5), settings)

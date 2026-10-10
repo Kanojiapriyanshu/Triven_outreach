@@ -15,7 +15,7 @@ export async function autoQueue(minScore = 55) {
   if (active >= 3) return 0
   const platforms = [...(youtubeConfigured() ? ['YOUTUBE'] : []), 'HN', 'DEVTO']
   const next = await prisma.audienceVideo.findMany({
-    where: { status: 'DISCOVERED', score: { gte: minScore }, platform: { in: platforms }, channel: { autoPaused: false } },
+    where: { status: 'DISCOVERED', track: 'BUILDER', score: { gte: minScore }, platform: { in: platforms }, channel: { autoPaused: false } },
     orderBy: [{ channel: { yieldScore: 'desc' } }, { score: 'desc' }, { commentCount: 'desc' }],
     take: 5 - active,
     select: { id: true },

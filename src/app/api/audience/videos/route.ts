@@ -11,7 +11,7 @@ export async function GET(req: NextRequest) {
   const status = sp.get('status')?.split(',').filter(Boolean)
   const channelId = sp.get('channelId')
   const videos = await prisma.audienceVideo.findMany({
-    where: { ...(status?.length ? { status: { in: status } } : {}), ...(channelId ? { channelId } : {}) },
+    where: { track: sp.get('track') === 'BUYER' ? 'BUYER' : 'BUILDER', ...(status?.length ? { status: { in: status } } : {}), ...(channelId ? { channelId } : {}) },
     include: {
       channel: { select: { id: true, title: true, handle: true } },
       _count: { select: { comments: { where: { relevance: { in: ['HIGH', 'MEDIUM'] } } } } },

@@ -2,6 +2,7 @@
 // campaigns, opt people out, forget people.
 import prisma from '../prisma'
 import { scoreVideo } from './classify'
+import { scoreBuyerVideo } from './buyer-rules'
 import {
   getChannels, getChannelByHandle, getVideos, latestUploadIds, parseYouTubeInput, searchChannels,
   isoDurationSeconds, bestThumb, type YtChannel, type YtVideo,
@@ -44,7 +45,7 @@ export async function saveChannel(c: YtChannel) {
 }
 
 /** Save videos (and their channels) with an audience-fit score. Existing videos keep their status. */
-export async function saveVideos(videos: YtVideo[]) {
+export async function saveVideos(videos: YtVideo[], opts: { track?: 'BUYER' } = {}) {
   const channelIds = [...new Set(videos.map((v) => v.snippet.channelId))]
   const knownChannels = await prisma.audienceChannel.findMany({ where: { youtubeChannelId: { in: channelIds } } })
   const missing = channelIds.filter((id) => !knownChannels.some((c) => c.youtubeChannelId === id))
@@ -62,7 +63,11 @@ export async function saveVideos(videos: YtVideo[]) {
     }
     const publishedAt = v.snippet.publishedAt ? new Date(v.snippet.publishedAt) : null
     const durationSeconds = isoDurationSeconds(v.contentDetails?.duration)
-    const fit = scoreVideo({ title: v.snippet.title, description: v.snippet.description, ...stats, publishedAt, durationSeconds })
+    const input = { title: v.snippet.title, description: v.snippet.description, ...stats, publishedAt, durationSeconds }
+    const buyerFit = opts.track === 'BUYER' ? scoreBuyerVideo(input) : null
+    // Off-topic results and videos nobody commented on are not worth keeping
+    if (buyerFit && (!buyerFit.onTopic || stats.commentCount < 5)) continue
+    const fit = buyerFit ? { score: buyerFit.score, reasons: buyerFit.reasons, interest: 'RECEPTION_BUYER' } : scoreVideo(input)
     const data = {
       channelId,
       title: v.snippet.title,
@@ -76,10 +81,13 @@ export async function saveVideos(videos: YtVideo[]) {
       scoreReasons: fit.reasons.join(' · '),
       interestCategory: fit.interest,
     }
+    // A video already being read for the AI Builder audience keeps its track
+    const known = opts.track ? await prisma.audienceVideo.findUnique({ where: { youtubeVideoId: v.id }, select: { status: true, track: true } }) : null
+    if (known && known.track !== opts.track && known.status !== 'DISCOVERED') continue
     saved.push(await prisma.audienceVideo.upsert({
       where: { youtubeVideoId: v.id },
-      create: { youtubeVideoId: v.id, ...data },
-      update: data,
+      create: { youtubeVideoId: v.id, ...data, ...(opts.track ? { track: opts.track } : {}) },
+      update: { ...data, ...(opts.track ? { track: opts.track } : {}) },
       include: { channel: { select: { title: true, handle: true, country: true } } },
     }))
   }
